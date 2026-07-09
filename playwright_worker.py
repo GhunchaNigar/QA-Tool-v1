@@ -98,7 +98,32 @@ def _is_blocked(html, text):
     combined = (html[:3000] + text[:1000]).lower()
     return any(s in combined for s in BLOCK_SIGNALS)
 
-def _is_thin(text, min_chars=200):
+# Same signal as _DATA_READY_SELECTOR below (tel:/mailto:/external
+# link), but as a plain string check against already-fetched HTML
+# rather than a live page.wait_for_selector call. Used by _is_thin as
+# an override: a page that already contains real contact data is not
+# "thin" no matter how short its total text is.
+#
+# Confirmed on blinx.biz/focal: total rendered text is only 181 chars,
+# but that 181 chars *is* the complete, correct business record --
+# name, address, phone, website, email. It was being discarded purely
+# because it's under the flat 200-char floor, even though both the
+# fast pass and the patient retry pass independently rendered the same
+# complete result (i.e. the page was genuinely done, not mid-hydration).
+_DATA_PRESENT_RE = re.compile(
+    r'href=["\']tel:|href=["\']mailto:'
+    r'|href=["\']https?://(?!(?:www\.)?(?:blinx\.biz|brownbook\.net))',
+    re.I,
+)
+
+
+def _has_real_data(html):
+    return bool(_DATA_PRESENT_RE.search(html or ""))
+
+
+def _is_thin(text, html="", min_chars=200):
+    if _has_real_data(html):
+        return False
     return len(text.strip()) < min_chars
 
 
@@ -296,7 +321,7 @@ async def scrape(url, timeout):
                 debug_notes.append(f"attempt1: {err}")
             elif _is_blocked(html, text):
                 debug_notes.append("attempt1: blocked/CAPTCHA")
-            elif _is_thin(text):
+            elif _is_thin(text, html):
                 debug_notes.append(
                     f"attempt1: too thin ({len(text.strip())} chars) | preview: {_preview(text)!r}"
                 )
@@ -304,7 +329,7 @@ async def scrape(url, timeout):
                 debug_notes.append(f"attempt1 OK | text={len(text):,} chars")
 
             attempt1_ok = (
-                not err and not _is_blocked(html, text) and not _is_thin(text)
+                not err and not _is_blocked(html, text) and not _is_thin(text, html)
             )
 
             # ---- Attempt 2 (patient retry) ----
@@ -320,7 +345,7 @@ async def scrape(url, timeout):
                     debug_notes.append(f"attempt2: {err2}")
                 elif _is_blocked(html2, text2):
                     debug_notes.append("attempt2: blocked/CAPTCHA")
-                elif _is_thin(text2):
+                elif _is_thin(text2, html2):
                     debug_notes.append(
                         f"attempt2: too thin ({len(text2.strip())} chars) | preview: {_preview(text2)!r}"
                     )
@@ -330,13 +355,13 @@ async def scrape(url, timeout):
                 # Prefer attempt 2's result if it's usable, even if
                 # attempt 1 produced *some* non-empty output -- a thin
                 # or blocked attempt 1 result is not a valid fallback.
-                if not err2 and not _is_blocked(html2, text2) and not _is_thin(text2):
+                if not err2 and not _is_blocked(html2, text2) and not _is_thin(text2, html2):
                     html, text, title = html2, text2, title2
 
             await browser.close()
 
             final_blocked = _is_blocked(html, text)
-            final_thin = _is_thin(text)
+            final_thin = _is_thin(text, html)
 
             if final_blocked:
                 result["debug"] = "Playwright: blocked/CAPTCHA | " + " | ".join(debug_notes)
