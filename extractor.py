@@ -69,7 +69,16 @@ SOCIAL_DOMAINS = {
     "x.com": "Twitter",
     "youtube": "YouTube",
     "tiktok": "TikTok",
-    "pinterest": "Pinterest"
+    "pinterest": "Pinterest",
+    # WhatsApp "click to chat" links (api.whatsapp.com/send?phone=...
+    # and wa.me/...) are a messaging CTA, not the business's website --
+    # several directory templates (nearfinderus.com confirmed) render
+    # this under a "Website" button/icon when the listing has a WhatsApp
+    # contact configured but no real external site on file. Without
+    # excluding it here, the generic "first external, non-social link"
+    # Website URL scan picks it up and mistakes it for the real site.
+    "wa.me": "WhatsApp",
+    "whatsapp.com": "WhatsApp",
 }
 
 # Same signals playwright_worker.py checks for -- used here to decide
