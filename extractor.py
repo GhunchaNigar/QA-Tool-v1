@@ -239,7 +239,19 @@ def _extract_nearfinder_redirect_url(href):
     link it finds instead -- which is frequently one of NearFinder's
     own links (blog, corporate site) in the page footer, not the
     business's actual website. Detects this redirect shape and returns
-    the decoded target URL, or None if `href` doesn't match it."""
+    the decoded target URL, or None if `href` doesn't match it.
+
+    NOTE: this same /empresa/redirect wrapper is used for MULTIPLE kinds
+    of outbound CTAs on this template -- not just the "Website" button.
+    Confirmed on the FOCAL listing: the WhatsApp "click to chat" button
+    (top of page, before the Website button in document order) is ALSO
+    wrapped in /empresa/redirect?url=https://api.whatsapp.com/send?..., 
+    and it renders earlier in the HTML than the real Website button
+    further down in the "Social / Internet" section. Because of that,
+    callers MUST NOT treat "found a redirect link" as "found the
+    website" -- the unwrapped target still needs to be checked against
+    SOCIAL_DOMAINS / maps patterns just like a plain absolute href
+    would be (see parse_nearfinderus's Website URL loop)."""
     if "/empresa/redirect" not in href.lower():
         return None
     target = parse_qs(urlparse(href).query).get("url")
@@ -375,20 +387,31 @@ def parse_nearfinderus(url, html):
 
     # ---- Website URL (external site only, checked before Social) ----
     # The real website link on this template is wrapped in a same-domain
-    # click-tracking redirect (see _extract_nearfinder_redirect_url), so
-    # that's checked and unwrapped first. Only if no redirect link is
-    # found does this fall back to scanning for a plain absolute external
-    # anchor -- which excludes the directory's own domain, social links,
-    # AND Google Maps / directions links (this template renders a
-    # map-pin "Directions" anchor, e.g. maps.google.com.br/maps/place/...,
-    # among the external links, and without excluding it explicitly it
-    # gets picked up as the Website URL instead of the business's real
-    # external site).
+    # click-tracking redirect (see _extract_nearfinder_redirect_url), but
+    # that SAME redirect wrapper is also used for other outbound CTAs on
+    # the page -- confirmed: the WhatsApp "click to chat" button uses the
+    # identical /empresa/redirect?url=... shape, targeting
+    # api.whatsapp.com, and it sits earlier in the HTML (top CTA row)
+    # than the real "Website" button (Social / Internet section further
+    # down the page). Treating "found any redirect link" as "found the
+    # website" therefore grabs the WhatsApp target first and never
+    # reaches the real site.
+    #
+    # Fix: after unwrapping a redirect target, run it through the SAME
+    # exclusion checks (social/WhatsApp domains, Google Maps/directions
+    # links) used below for plain absolute external anchors, and keep
+    # scanning rather than stopping if it's excluded. Only accept -- and
+    # then break on -- a redirect target (or plain external link) that
+    # survives those checks.
     for a in soup.find_all("a", href=True):
         href = a["href"]
 
         redirect_target = _extract_nearfinder_redirect_url(href)
         if redirect_target:
+            if any(domain in redirect_target.lower() for domain in SOCIAL_DOMAINS):
+                continue
+            if _is_maps_link(redirect_target):
+                continue
             business["Website URL"] = redirect_target
             break
 
@@ -406,11 +429,20 @@ def parse_nearfinderus(url, html):
             break
 
     # ---- Social Media ----
+    # NOTE: this deliberately re-scans ALL anchors (including redirect-
+    # wrapped ones) rather than only plain absolute hrefs, so that a
+    # WhatsApp CTA wrapped in /empresa/redirect?url=... still gets
+    # recorded under Social Media Links even though it was correctly
+    # excluded from Website URL above.
     for a in soup.find_all("a", href=True):
         href = a["href"]
+
+        redirect_target = _extract_nearfinder_redirect_url(href)
+        link_target = redirect_target if redirect_target else href
+
         for domain, network in SOCIAL_DOMAINS.items():
-            if domain in href.lower():
-                business["Social Media Links"][network] = href
+            if domain in link_target.lower():
+                business["Social Media Links"][network] = link_target
 
     # ---- Hours (HTML fallback -- table, not JSON-LD) ----
     if not business["Hours"]:
