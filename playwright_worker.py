@@ -33,6 +33,23 @@ BLOCK_SIGNALS = [
     "security check", "access to this page has been denied",
 ]
 
+# Signals that the rendered page is Cloudflare's own error page (origin
+# server down / unreachable / timed out) rather than the site's real
+# content. This is a different failure shape from BLOCK_SIGNALS above:
+# a bot-check page gets caught by _is_blocked, but a Cloudflare 5xx
+# error page is neither a bot-check page nor "thin" -- it renders
+# enough of its own boilerplate text to clear _is_thin's char floor --
+# so without checking for it explicitly, page.goto() "succeeds" (the
+# navigation completed, it's just Cloudflare's error page that loaded)
+# and the worker reports success:true with Cloudflare's error page as
+# the scraped content. The caller then has no way to tell this apart
+# from a real, empty listing.
+CLOUDFLARE_ERROR_SIGNALS = [
+    "error 521", "error 522", "error 523", "error 524", "error 525", "error 526",
+    "web server is down", "connection timed out", "origin is unreachable",
+    "cloudflare ray id",
+]
+
 # ── Stealth init script ──────────────────────────────────────────────
 # Injected into every new page BEFORE any site JS runs (via
 # add_init_script), so it patches the fingerprints most bot-detection
@@ -70,6 +87,10 @@ if (originalQuery) {
 def _is_blocked(html, text):
     combined = (html[:3000] + text[:1000]).lower()
     return any(s in combined for s in BLOCK_SIGNALS)
+
+def _is_cloudflare_error(html, text):
+    combined = (html[:3000] + text[:1000]).lower()
+    return any(s in combined for s in CLOUDFLARE_ERROR_SIGNALS)
 
 def _is_thin(text, min_chars=200):
     return len(text.strip()) < min_chars
@@ -232,20 +253,28 @@ async def scrape(url, timeout):
                 debug_notes.append(f"attempt1: {err}")
             elif _is_blocked(html, text):
                 debug_notes.append("attempt1: blocked/CAPTCHA")
+            elif _is_cloudflare_error(html, text):
+                debug_notes.append("attempt1: Cloudflare error page (origin down/unreachable)")
             elif _is_thin(text):
                 debug_notes.append(f"attempt1: too thin ({len(text.strip())} chars)")
             else:
                 debug_notes.append(f"attempt1 OK | text={len(text):,} chars")
 
             attempt1_ok = (
-                not err and not _is_blocked(html, text) and not _is_thin(text)
+                not err
+                and not _is_blocked(html, text)
+                and not _is_cloudflare_error(html, text)
+                and not _is_thin(text)
             )
 
             # ---- Attempt 2 (patient retry) ----
             # Only retried when attempt 1 didn't cleanly succeed -- this
             # is what fixes the "works sometimes, fails other times"
             # pattern: a single slow/early snapshot no longer means the
-            # whole extraction fails outright.
+            # whole extraction fails outright. Note: if the origin is
+            # actually down (Cloudflare error), this retry will very
+            # likely hit the same error page again -- that's expected
+            # and reported below, rather than treated as a real result.
             if not attempt1_ok:
                 html2, text2, title2, err2 = await _attempt(
                     context, url, timeout, patient=True
@@ -254,24 +283,39 @@ async def scrape(url, timeout):
                     debug_notes.append(f"attempt2: {err2}")
                 elif _is_blocked(html2, text2):
                     debug_notes.append("attempt2: blocked/CAPTCHA")
+                elif _is_cloudflare_error(html2, text2):
+                    debug_notes.append("attempt2: Cloudflare error page (origin down/unreachable)")
                 elif _is_thin(text2):
                     debug_notes.append(f"attempt2: too thin ({len(text2.strip())} chars)")
                 else:
                     debug_notes.append(f"attempt2 OK | text={len(text2):,} chars")
 
                 # Prefer attempt 2's result if it's usable, even if
-                # attempt 1 produced *some* non-empty output -- a thin
-                # or blocked attempt 1 result is not a valid fallback.
-                if not err2 and not _is_blocked(html2, text2) and not _is_thin(text2):
+                # attempt 1 produced *some* non-empty output -- a thin,
+                # blocked, or Cloudflare-error attempt 1 result is not
+                # a valid fallback.
+                if (
+                    not err2
+                    and not _is_blocked(html2, text2)
+                    and not _is_cloudflare_error(html2, text2)
+                    and not _is_thin(text2)
+                ):
                     html, text, title = html2, text2, title2
 
             await browser.close()
 
             final_blocked = _is_blocked(html, text)
+            final_cf_error = _is_cloudflare_error(html, text)
             final_thin = _is_thin(text)
 
             if final_blocked:
                 result["debug"] = "Playwright: blocked/CAPTCHA | " + " | ".join(debug_notes)
+                return result
+            if final_cf_error:
+                result["debug"] = (
+                    "Playwright: Cloudflare error page (origin server down/unreachable) | "
+                    + " | ".join(debug_notes)
+                )
                 return result
             if final_thin:
                 result["debug"] = (
