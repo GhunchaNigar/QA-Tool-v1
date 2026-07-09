@@ -196,6 +196,23 @@ def fetch_via_playwright(url, worker_path="playwright_worker.py", timeout_ms=450
 # Site parser: nearfinderus.com
 # ==========================================================
 
+def _extract_nearfinder_redirect_url(href):
+    """This site wraps the real external website behind a same-domain
+    click-tracking redirect link (e.g.
+    "/en/empresa/redirect?url=<url-encoded target>&id=...&cache=..."),
+    rather than linking to the business's site directly. That href is
+    relative, so the generic "must start with http" anchor scan below
+    skips it entirely and falls through to the next absolute external
+    link it finds instead -- which is frequently one of NearFinder's
+    own links (blog, corporate site) in the page footer, not the
+    business's actual website. Detects this redirect shape and returns
+    the decoded target URL, or None if `href` doesn't match it."""
+    if "/empresa/redirect" not in href.lower():
+        return None
+    target = parse_qs(urlparse(href).query).get("url")
+    return target[0] if target else None
+
+
 def parse_nearfinderus(url, html):
 
     soup = BeautifulSoup(html, "lxml")
@@ -324,17 +341,27 @@ def parse_nearfinderus(url, html):
         business["Business Email"] = email["href"].replace("mailto:", "").strip()
 
     # ---- Website URL (external site only, checked before Social) ----
-    # Excludes the directory's own domain, social links, AND Google Maps
-    # / directions links -- this template renders a map-pin "Directions"
-    # anchor (e.g. maps.google.com.br/maps/place/...) among the external
-    # links, and without excluding it explicitly it gets picked up as the
-    # Website URL instead of the business's real external site.
+    # The real website link on this template is wrapped in a same-domain
+    # click-tracking redirect (see _extract_nearfinder_redirect_url), so
+    # that's checked and unwrapped first. Only if no redirect link is
+    # found does this fall back to scanning for a plain absolute external
+    # anchor -- which excludes the directory's own domain, social links,
+    # AND Google Maps / directions links (this template renders a
+    # map-pin "Directions" anchor, e.g. maps.google.com.br/maps/place/...,
+    # among the external links, and without excluding it explicitly it
+    # gets picked up as the Website URL instead of the business's real
+    # external site).
     for a in soup.find_all("a", href=True):
         href = a["href"]
 
+        redirect_target = _extract_nearfinder_redirect_url(href)
+        if redirect_target:
+            business["Website URL"] = redirect_target
+            break
+
         if not href.startswith("http"):
             continue
-        if "nearfinderus.com" in href.lower():
+        if "nearfinderus.com" in href.lower() or "nearfinder.com" in href.lower():
             continue
         if any(domain in href.lower() for domain in SOCIAL_DOMAINS):
             continue
@@ -1355,6 +1382,7 @@ _PLACE123_LABELS = {
     "owner name": None,
     "phone": "Phone",
     "website": "Website URL",
+    "url": "Website URL",
     "business email": "Business Email",
     "about us": "Description",
     "related searches": "Keywords",
@@ -1442,9 +1470,15 @@ def parse_place123(url, html):
         if name_idx + 3 < len(lines) and lines[name_idx + 3].rstrip(":").lower() not in label_keys:
             business["Country"] = lines[name_idx + 3]
 
-    # ---- Owner Name / Phone / Website / Business Email / About Us /
+    # ---- Owner Name / Phone / Website / URL / Business Email / About Us /
     #      Related Searches (flat label-then-value scan, stopping at
-    #      either the next known label or a page-chrome terminator) ----
+    #      either the next known label or a page-chrome terminator).
+    #      NOTE: this site labels the website link "URL:" rather than
+    #      "Website:" -- both are mapped to Website URL in
+    #      _PLACE123_LABELS above. Without "url" recognized as a label,
+    #      the value-collection loop for the preceding field (Business
+    #      Email) wouldn't stop at it, and the email value would swallow
+    #      the "URL:" line and the URL itself. ----
     i = 0
     n = len(lines)
     while i < n:
