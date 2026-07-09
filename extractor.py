@@ -11,9 +11,15 @@ Supports (auto-detected by domain):
   - callupcontact.com     -- static HTML, fetched with requests
   - zumvu.com             -- sits behind a JS "browser check" wall,
                              fetched via playwright_worker.py (subprocess)
-  - blinx.biz             -- Next.js SSR page; data pulled from the
-                             embedded __NEXT_DATA__ JSON blob (Brownbook-
-                             backed listing), with HTML fallback
+  - blinx.biz             -- Next.js page whose business record is loaded
+                             client-side via an XHR call AFTER the initial
+                             HTML loads (confirmed via DevTools Network
+                             tab -- it is NOT present in the raw HTML or in
+                             __NEXT_DATA__), so this is fetched via
+                             playwright_worker.py (subprocess) to let the
+                             page hydrate and render the real values before
+                             we read them; embedded __NEXT_DATA__ is still
+                             checked first as a cheap win when present.
   - place123.net          -- static HTML, fetched with requests (old-style
                              server-rendered directory template; see
                              parse_place123 for details)
@@ -131,6 +137,18 @@ def empty_business():
 def _looks_blocked(html_text):
     combined = html_text[:4000].lower()
     return any(s in combined for s in BLOCK_SIGNALS)
+
+
+# Domains/patterns that indicate a Google Maps / directions link rather
+# than the business's own external website. Several site templates put
+# a "Directions" or map-pin link among the page's external anchors, and
+# a naive "first external, non-social link wins" scan will grab that
+# instead of the real website unless it's explicitly excluded (this bit
+# Nearfinder: its Website URL scan picked up a maps.google.com.br link
+# instead of the business's actual site).
+def _is_maps_link(href):
+    href = href.lower()
+    return "google" in href and "map" in href
 
 
 # ==========================================================
@@ -306,6 +324,11 @@ def parse_nearfinderus(url, html):
         business["Business Email"] = email["href"].replace("mailto:", "").strip()
 
     # ---- Website URL (external site only, checked before Social) ----
+    # Excludes the directory's own domain, social links, AND Google Maps
+    # / directions links -- this template renders a map-pin "Directions"
+    # anchor (e.g. maps.google.com.br/maps/place/...) among the external
+    # links, and without excluding it explicitly it gets picked up as the
+    # Website URL instead of the business's real external site.
     for a in soup.find_all("a", href=True):
         href = a["href"]
 
@@ -314,6 +337,8 @@ def parse_nearfinderus(url, html):
         if "nearfinderus.com" in href.lower():
             continue
         if any(domain in href.lower() for domain in SOCIAL_DOMAINS):
+            continue
+        if _is_maps_link(href):
             continue
 
         if not business["Website URL"]:
@@ -1084,11 +1109,60 @@ def _split_blinx_address(address):
     return street, city, state, zipcode
 
 
+# This is the shape Blinx renders the full address in once the page is
+# rendered: "<street>, <city>, <ST> ,<zip>" (note the loose comma/space
+# right before the zip -- that's how their own template formats it, not
+# a parsing artifact on our end). Captured as its own regex because the
+# API's raw "address" field (see _find_brownbook_record / below) is only
+# ever the bare street with no commas at all, so it can't be split the
+# same way place123/freelistingusa addresses are split.
+_BLINX_RENDERED_ADDRESS_RE = re.compile(
+    r"^(?P<street>.+?),\s*(?P<city>[^,]+?),\s*(?P<state>[A-Za-z]{2,})\s*,?\s*(?P<zip>\d{5}(?:-\d{4})?)$"
+)
+
+
+def _extract_blinx_address_from_dom(soup):
+    """Blinx's business-detail API only returns the raw street address
+    in its "address" field (e.g. "8910 University Center Ln" -- no
+    city/state/zip attached, confirmed via the actual API response).
+    City/State/Zip only ever appear together in the rendered page text,
+    in a line shaped like "8910 University Center Ln, San Diego, CA
+    ,92122". Scan the rendered text for that shape instead of trying to
+    reconstruct it from the API payload alone.
+
+    Returns (street, city, state, zip) or None if no matching line is
+    found (e.g. because the HTML was fetched via plain requests before
+    the page hydrated and rendered the address)."""
+
+    for raw_line in soup.get_text(separator="\n").split("\n"):
+        line = clean(raw_line)
+        if not line or "," not in line:
+            continue
+        match = _BLINX_RENDERED_ADDRESS_RE.match(line)
+        if match:
+            return (
+                match.group("street").strip(),
+                match.group("city").strip(),
+                match.group("state").strip(),
+                match.group("zip").strip(),
+            )
+
+    return None
+
+
 def _find_brownbook_record(obj, _depth=0):
     """Recursively searches a decoded __NEXT_DATA__ JSON tree for the
     first dict that has a "brownbook_id" key, which identifies the
     actual listing record regardless of how deeply Next.js nests it
-    inside pageProps."""
+    inside pageProps.
+
+    NOTE: on the current version of blinx.biz this record is loaded by
+    a client-side XHR call made *after* the initial page load (verified
+    via the browser Network tab), not embedded in __NEXT_DATA__ at all.
+    This function is kept because some listings/older pages may still
+    embed it server-side, but callers must not assume it will find
+    anything -- see parse_blinx, which treats the rendered DOM as the
+    primary source and this as a bonus when present."""
 
     if _depth > 12:
         return None
@@ -1147,6 +1221,10 @@ def parse_blinx(url, html):
     business = empty_business()
 
     # ---- Primary source: Next.js __NEXT_DATA__ hydration payload ----
+    # Only present when a listing happens to be server-rendered with the
+    # record already embedded; on the common case (record loaded via a
+    # post-load XHR call) this will simply come back None and every
+    # field below falls through to the rendered-DOM / meta-tag sources.
     record = None
     next_data_script = soup.find("script", id="__NEXT_DATA__")
 
@@ -1162,14 +1240,6 @@ def parse_blinx(url, html):
     if record:
         business["Business Name"] = record.get("name") or record.get("title") or ""
 
-        address = record.get("address", "")
-        if address:
-            street, city, state, zipcode = _split_blinx_address(address)
-            business["Street"] = street
-            business["City"] = city
-            business["State"] = state
-            business["Zipcode"] = zipcode
-
         business["Country"] = record.get("country", "")
         business["Phone"] = record.get("phone", "")
         business["Business Email"] = record.get("email", "")
@@ -1183,6 +1253,36 @@ def parse_blinx(url, html):
             business["Logo"] = urljoin(url, logo)
 
         _blinx_links_to_business(business, record.get("links"))
+
+        # The API's "address" field is only ever the bare street (e.g.
+        # "8910 University Center Ln") with no city/state/zip attached.
+        # Only run it through the comma-splitter if it actually looks
+        # like a full "street, city, state zip" string; otherwise it's
+        # just the street, and running it through the splitter would
+        # dump the whole thing into State (which is what the previous
+        # version of this parser did).
+        address = record.get("address", "")
+        if address:
+            if "," in address:
+                street, city, state, zipcode = _split_blinx_address(address)
+                business["Street"] = street
+                business["City"] = city
+                business["State"] = state
+                business["Zipcode"] = zipcode
+            else:
+                business["Street"] = clean(address)
+
+    # ---- Address: prefer the rendered DOM ----
+    # This is the authoritative source for the full address (street +
+    # city + state + zip together) since the API/record only ever gives
+    # the bare street. Overrides whatever the record block above set.
+    dom_address = _extract_blinx_address_from_dom(soup)
+    if dom_address:
+        street, city, state, zipcode = dom_address
+        business["Street"] = street
+        business["City"] = city
+        business["State"] = state
+        business["Zipcode"] = zipcode
 
     # ---- Business Name fallback (og:title / <title>) ----
     if not business["Business Name"]:
@@ -1219,6 +1319,11 @@ def parse_blinx(url, html):
             business["Business Email"] = email["href"].replace("mailto:", "").strip()
 
     # ---- Website / social fallback (visible anchors) ----
+    # This is also the primary source in practice: since the record is
+    # loaded client-side, the real website link is almost always only
+    # available once rendered, as a plain anchor here, rather than via
+    # `record["links"]` above (which is frequently unavailable when
+    # fetched via plain requests).
     for a in soup.find_all("a", href=True):
         href = a["href"]
 
@@ -1226,7 +1331,7 @@ def parse_blinx(url, html):
             continue
         if "blinx.biz" in href.lower():
             continue
-        if "google.com/maps" in href.lower():
+        if "google.com/maps" in href.lower() or _is_maps_link(href):
             continue
 
         matched_social = False
@@ -1702,7 +1807,12 @@ SITE_PARSERS = {
     "zeemaps.com": ("api", parse_zeemaps),
     "callupcontact.com": ("requests", parse_callupcontact),
     "zumvu.com": ("playwright", parse_zumvu),
-    "blinx.biz": ("requests", parse_blinx),
+    # blinx.biz's business record loads via a client-side XHR call made
+    # AFTER the initial page load (confirmed via the browser Network
+    # tab -- it's not in the raw HTML or __NEXT_DATA__ that a plain
+    # requests.get() would see), so this needs Playwright to let the
+    # page hydrate and populate the DOM before we read it.
+    "blinx.biz": ("playwright", parse_blinx),
     "place123.net": ("requests", parse_place123),
     "freelistingusa.com": ("requests", parse_freelistingusa),
 }
