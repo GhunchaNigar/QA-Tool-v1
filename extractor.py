@@ -139,6 +139,30 @@ def _looks_blocked(html_text):
     return any(s in combined for s in BLOCK_SIGNALS)
 
 
+# Signals that the fetched HTML is Cloudflare's own error page (origin
+# server down / unreachable / timed out) rather than real page content.
+# Distinct from BLOCK_SIGNALS above: a 5xx error page can render with a
+# normal HTML layout and still count as a "successful" fetch from some
+# fetchers (e.g. Playwright's page.goto() considers navigation
+# successful even though what rendered is Cloudflare's error page for
+# an unreachable origin, not the actual site), so _looks_blocked's
+# bot-check phrases don't catch it. Without this separate check, the
+# parser runs on the error page as if it were real content -- every
+# business field comes back empty, and the generic anchor scan can pick
+# up an incidental link from the error page itself (e.g. Cloudflare's
+# troubleshooting docs) and mistakenly set it as the Website URL.
+CLOUDFLARE_ERROR_SIGNALS = [
+    "error 521", "error 522", "error 523", "error 524", "error 525", "error 526",
+    "web server is down", "connection timed out", "origin is unreachable",
+    "cloudflare ray id",
+]
+
+
+def _looks_like_cloudflare_error(html_text):
+    combined = html_text[:4000].lower()
+    return any(s in combined for s in CLOUDFLARE_ERROR_SIGNALS)
+
+
 # Domains/patterns that indicate a Google Maps / directions link rather
 # than the business's own external website. Several site templates put
 # a "Directions" or map-pin link among the page's external anchors, and
@@ -1888,6 +1912,17 @@ def extract_business(url, worker_path="playwright_worker.py"):
             html = fetch_via_playwright(url, worker_path=worker_path)
     else:
         html = fetch_via_playwright(url, worker_path=worker_path)
+
+    # A Cloudflare error page can come back as a "successful" fetch
+    # (see _looks_like_cloudflare_error above) -- catch it here, before
+    # handing it to the parser, rather than silently returning an
+    # empty/garbage record.
+    if _looks_like_cloudflare_error(html):
+        raise RuntimeError(
+            f"Fetch for {url} returned a Cloudflare error page "
+            f"(origin server appears to be down or unreachable), "
+            f"not the real page content."
+        )
 
     business = parser(url, html)
 
