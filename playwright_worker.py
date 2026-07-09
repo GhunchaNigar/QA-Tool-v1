@@ -67,12 +67,53 @@ if (originalQuery) {
 }
 """
 
+# ── Data-arrival selectors ───────────────────────────────────────────
+# Several sites (blinx.biz confirmed via DevTools Network tab, likely
+# others) render an empty/skeleton shell in the initial HTML and only
+# populate the real business content (phone, email, external website
+# link) via a client-side XHR call that fires AFTER the page's load/
+# networkidle/domcontentloaded events already resolved. Blindly sleeping
+# a fixed number of ms after those events is a guess: too short and we
+# snapshot the shell (this is what produced the "too thin (181 chars)"
+# result on blinx.biz/focal even though the data reliably exists and
+# loads a few seconds later); too long and every other page pays the
+# extra wait for nothing.
+#
+# Instead, explicitly wait for ONE of these selectors to appear before
+# extracting -- they're the actual data we care about, so their
+# presence is a direct signal the XHR has resolved rather than an
+# indirect proxy like "did innerText length stop changing for a bit".
+# This is best-effort: a listing with no phone/email/website at all
+# would never match and we'd fall through to the timeout, which is
+# fine since the existing text-stabilization polling below still runs
+# as a secondary check either way.
+_DATA_READY_SELECTOR = (
+    'a[href^="tel:"], '
+    'a[href^="mailto:"], '
+    'a[href^="http"]:not([href*="blinx.biz"]):not([href*="brownbook.net"])'
+)
+
+
 def _is_blocked(html, text):
     combined = (html[:3000] + text[:1000]).lower()
     return any(s in combined for s in BLOCK_SIGNALS)
 
 def _is_thin(text, min_chars=200):
     return len(text.strip()) < min_chars
+
+
+async def _wait_for_data(page, timeout_ms):
+    """Waits for a selector that signals real business data has
+    rendered (see _DATA_READY_SELECTOR above), rather than a blind
+    sleep. Never raises -- a timeout here just means the page may
+    genuinely have no phone/email/external link, or is taking longer
+    than expected; either way extraction proceeds with whatever's
+    there, same as before this was added."""
+    try:
+        await page.wait_for_selector(_DATA_READY_SELECTOR, timeout=timeout_ms)
+        return True
+    except Exception:
+        return False
 
 
 async def _extract_and_expand(page):
@@ -139,7 +180,7 @@ async def _extract_and_expand(page):
     # stopping once it holds steady (or we hit a small cap) catches
     # that without slowing down pages that were already done.
     previous_len = -1
-    for _ in range(4):
+    for _ in range(6):
         current_text = await page.evaluate(
             "() => document.body ? document.body.innerText.trim().length : 0"
         )
@@ -170,7 +211,7 @@ async def _attempt(context, url, timeout, patient):
     `patient` widens the wait strategy for the retry pass -- the first
     attempt tries to be quick (networkidle, falling back to
     domcontentloaded), the retry pass gives the page more room to
-    settle (domcontentloaded first, then an explicit extra pause)
+    settle (domcontentloaded first, then an explicit data-ready wait)
     since a page that was too slow/thin on attempt 1 may just need
     more time rather than a different approach entirely."""
 
@@ -181,13 +222,25 @@ async def _attempt(context, url, timeout, patient):
                 await page.goto(url, timeout=timeout, wait_until="networkidle")
             except Exception:
                 await page.goto(url, timeout=timeout, wait_until="domcontentloaded")
+            # Give client-side-hydrated content (e.g. blinx.biz's
+            # business record, loaded via a post-load XHR) a chance to
+            # land before the fast pass extracts. This is a real signal
+            # (selector presence), not a blind sleep -- see
+            # _DATA_READY_SELECTOR above for why that matters.
+            await _wait_for_data(page, min(timeout, 8000))
         else:
             # Retry pass: domcontentloaded first (less likely to itself
             # time out on pages with persistent background requests
             # like analytics/ads that never let networkidle fire), then
-            # give the page extra settle time before extracting.
+            # wait explicitly for the data-bearing selector with a much
+            # longer budget before falling back to extraction regardless.
             await page.goto(url, timeout=timeout, wait_until="domcontentloaded")
-            await page.wait_for_timeout(3000)
+            data_arrived = await _wait_for_data(page, min(timeout, 20000))
+            if not data_arrived:
+                # Selector never showed up within budget -- give the
+                # page one more flat settle window as a last resort
+                # rather than extracting immediately on timeout.
+                await page.wait_for_timeout(3000)
 
         html, text, title = await _extract_and_expand(page)
         return html, text, title, None
@@ -195,6 +248,17 @@ async def _attempt(context, url, timeout, patient):
         return "", "", "", f"goto/extract failed: {e}"
     finally:
         await page.close()
+
+
+def _preview(text, n=300):
+    """Short, single-line preview of captured text for debug output,
+    so a 'too thin' result is actually diagnosable (shell-before-
+    hydration vs. an unrecognized bot-block page vs. a genuinely
+    sparse listing) without having to rerun with extra instrumentation."""
+    flat = re.sub(r"\s+", " ", (text or "")).strip()
+    if len(flat) > n:
+        flat = flat[:n] + "…"
+    return flat
 
 
 async def scrape(url, timeout):
@@ -233,7 +297,9 @@ async def scrape(url, timeout):
             elif _is_blocked(html, text):
                 debug_notes.append("attempt1: blocked/CAPTCHA")
             elif _is_thin(text):
-                debug_notes.append(f"attempt1: too thin ({len(text.strip())} chars)")
+                debug_notes.append(
+                    f"attempt1: too thin ({len(text.strip())} chars) | preview: {_preview(text)!r}"
+                )
             else:
                 debug_notes.append(f"attempt1 OK | text={len(text):,} chars")
 
@@ -255,7 +321,9 @@ async def scrape(url, timeout):
                 elif _is_blocked(html2, text2):
                     debug_notes.append("attempt2: blocked/CAPTCHA")
                 elif _is_thin(text2):
-                    debug_notes.append(f"attempt2: too thin ({len(text2.strip())} chars)")
+                    debug_notes.append(
+                        f"attempt2: too thin ({len(text2.strip())} chars) | preview: {_preview(text2)!r}"
+                    )
                 else:
                     debug_notes.append(f"attempt2 OK | text={len(text2):,} chars")
 
