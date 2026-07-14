@@ -77,7 +77,15 @@ user_data = {}
 
 # Fields that get special treatment — excluded from the generic 3-col grid
 CATEGORY_FIELD = "Category"
-TEXTAREA_FIELDS = ("Description", "Keywords", "Hours", "Social Media Links", "GBP Link")
+TEXTAREA_FIELDS = ("Description", "Keywords")
+
+# Fields that are graded on presence alone (comparator.py checks only
+# whether extraction found *something*, never against a user-typed
+# value) — VISUAL_FIELDS (Logo/Photos) plus Hours, GBP Link, and Social
+# Media Links. Rendered as a Yes/No selector, same as Logo/Photos
+# always were, rather than a free-text box whose contents the
+# comparator never actually reads.
+PRESENCE_ONLY_FIELDS = set(VISUAL_FIELDS) | {"Hours", "GBP Link", "Social Media Links"}
 
 # All fields except Category go into the standard 3-column grid
 fields_for_grid = [f for f in ALL_FIELDS if f != CATEGORY_FIELD]
@@ -89,7 +97,7 @@ for chunk in chunks:
     cols = st.columns(COLS)
     for i, field in enumerate(chunk):
         with cols[i]:
-            if field in VISUAL_FIELDS:
+            if field in PRESENCE_ONLY_FIELDS:
                 sel = st.selectbox(
                     field,
                     options=["Yes — should be present", "No — not required"],
