@@ -475,8 +475,26 @@ def compare_row(
         # genuinely has no hours listed (e.g. freelistingusa.com) would
         # never get flagged as MISSING even though Hours is applicable
         # there per fields_config.SOURCE_FIELDS.
-        if field == "Hours":
-            if extracted_val is None or str(extracted_val).strip() in ("", "null", "None"):
+        # Presence-only fields: Hours, GBP Link, Social Media Links.
+        # Same reasoning for all three — most sources don't collect an
+        # "expected" value from the user for these (there's rarely a
+        # ground-truth Hours string, GBP Link, or Social Media Links to
+        # type in and compare against), so user_val is blank far more
+        # often than not. If the "user left this field blank" check below
+        # ran first it would always short-circuit these fields to N/A,
+        # even on a source where the field is genuinely tracked per
+        # fields_config.SOURCE_FIELDS and the only real question is
+        # whether extraction found *anything* on the page.
+        #
+        # Social Media Links' extracted_val is a dict (network -> url),
+        # e.g. {} or {"Facebook": "..."}, not a string — `not extracted_val`
+        # correctly treats None, "", and {} all as empty without needing a
+        # separate str()-based check for that field.
+        if field in ("Hours", "GBP Link", "Social Media Links"):
+            if not extracted_val or (
+                isinstance(extracted_val, str)
+                and extracted_val.strip() in ("", "null", "None")
+            ):
                 row_result[field] = "MISSING"
                 has_error = True
             else:
