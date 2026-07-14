@@ -53,6 +53,48 @@ SOURCE_FIELDS = {
         "Business Email",	"Category",	"Logo"
     ],
     
+    "askmap.net": [
+        "Name", "Street", "City", "State", "Zipcode",
+        "Phone", "Website URL", "Keywords", "Description", "Hours",
+        "Category", "Logo",
+    ],
+    "earthmom.org": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Description",
+        "Hours", "Social Media Link", "GBP Link",
+        "Category", "Logo", 
+    ],
+    "gravitysplash.com": [
+        "Name", "Street", "City", "State", "Zipcode",
+        "Phone", "Website URL", "Description",
+        "Social Media Links",
+        "Category",
+    ],
+    "webforcompany.com": [
+        "Name", "Street", "City", "State", "Zipcode",
+        "Phone", "Website URL", "Keywords", "Description",
+        "Hours", "Social Media Links", "GBP Link",
+        "Business Email", "Logo",
+    ],
+    "provenexpert.com": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+    "Phone", "Website URL", "Keywords", "Description",
+    "Hours", "Social Media Links", "GBP Link", "Business Email",
+    "Category", "Logo", "Photos",
+    ],
+    "zipleaf.us": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Keywords", "Description",
+        "Hours", "Social Media Links", "GBP Link", "Business Email",
+        "Category", "Logo",
+    ],
+    "cataloxy.us": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Keywords", "Description",
+        "Social Media Links", "Business Email",
+        "Category", "Logo",
+    ],
+    
     
     
 }
