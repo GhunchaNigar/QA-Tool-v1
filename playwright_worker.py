@@ -11,6 +11,7 @@ import sys
 import json
 import asyncio
 import re
+from urllib.parse import urlparse
 
 def set_windows_event_loop():
     """
@@ -98,6 +99,31 @@ def _is_blocked(html, text):
     combined = (html[:3000] + text[:1000]).lower()
     return any(s in combined for s in BLOCK_SIGNALS)
 
+
+# A page's <title>/og:title being literally its own bare domain (e.g.
+# "www.manta.com" instead of the actual listing's name) is a strong,
+# generic signal that a bot-mitigation stub/shell rendered instead of
+# real content. Confirmed on manta.com: the stub still has a full nav
+# bar and footer (hundreds of chars of boilerplate text), so a plain
+# text-length "thin" check alone doesn't catch it -- this title check
+# does, directly, regardless of how much surrounding chrome padded the
+# character count. Deliberately conservative (exact match, not a
+# substring test) so it can't misfire on a real listing whose name
+# happens to mention the site's name.
+_BARE_DOMAIN_TITLE_RE = re.compile(r"^(?:www\.)?[\w-]+\.[a-z]{2,}$", re.I)
+
+
+def _is_bare_domain_title(title, own_domain=None):
+    t = (title or "").strip()
+    if not t:
+        return False
+    if not _BARE_DOMAIN_TITLE_RE.match(t):
+        return False
+    if own_domain:
+        bare = t[4:] if t.lower().startswith("www.") else t
+        return bare.lower() == own_domain.lower()
+    return True
+
 # Same signal as _DATA_READY_SELECTOR below (tel:/mailto:/external
 # link), but as a plain string check against already-fetched HTML
 # rather than a live page.wait_for_selector call. Used by _is_thin as
@@ -110,19 +136,53 @@ def _is_blocked(html, text):
 # because it's under the flat 200-char floor, even though both the
 # fast pass and the patient retry pass independently rendered the same
 # complete result (i.e. the page was genuinely done, not mid-hydration).
+#
+# IMPORTANT: this must exclude common site-chrome/social-platform
+# domains, not just the two names below. Confirmed on manta.com: its
+# bot-mitigation stub page (served to Playwright too -- real listing
+# content missing, but the surrounding site template intact) still
+# contains the page's own persistent footer links to twitter.com/Manta,
+# facebook.com/mantacom, and linkedin.com/company/manta. Those are
+# boilerplate present on EVERY page of the site, blocked or not, so
+# without excluding them here they satisfied this "real data" check
+# and made a blocked stub page with zero actual business data look
+# like a complete, legitimate extraction (success:true, but every
+# field downstream ends up blank except a garbage Name scraped from
+# the stub's own bare-domain og:title).
+_CHROME_DOMAINS = (
+    r"blinx\.biz|brownbook\.net"
+    r"|facebook\.com|twitter\.com|x\.com|instagram\.com"
+    r"|linkedin\.com|youtube\.com|tiktok\.com|pinterest\.com"
+    r"|google\.com|googletagmanager\.com|googleapis\.com|gstatic\.com"
+    r"|doubleclick\.net|wa\.me|whatsapp\.com"
+)
+
 _DATA_PRESENT_RE = re.compile(
     r'href=["\']tel:|href=["\']mailto:'
-    r'|href=["\']https?://(?!(?:www\.)?(?:blinx\.biz|brownbook\.net))',
+    r'|href=["\']https?://(?!(?:www\.)?(?:' + _CHROME_DOMAINS + r'))',
     re.I,
 )
 
 
-def _has_real_data(html):
-    return bool(_DATA_PRESENT_RE.search(html or ""))
+def _has_real_data(html, own_domain=None):
+    """own_domain (the site currently being scraped, e.g. "manta.com")
+    is excluded too, on top of the fixed chrome-domain list, so a
+    directory site's self-referential nav/footer links (e.g. Manta
+    linking to its own other listing pages) can't count as evidence of
+    THIS listing's real data either."""
+    text = html or ""
+    if own_domain:
+        text = re.sub(
+            r'href=["\']https?://(?:www\.)?' + re.escape(own_domain),
+            "",
+            text,
+            flags=re.I,
+        )
+    return bool(_DATA_PRESENT_RE.search(text))
 
 
-def _is_thin(text, html="", min_chars=200):
-    if _has_real_data(html):
+def _is_thin(text, html="", min_chars=200, own_domain=None):
+    if _has_real_data(html, own_domain=own_domain):
         return False
     return len(text.strip()) < min_chars
 
@@ -290,6 +350,10 @@ async def scrape(url, timeout):
     from playwright.async_api import async_playwright
     result = {"success": False, "html": "", "text": "", "title": "", "debug": ""}
 
+    own_domain = urlparse(url).netloc.lower()
+    if own_domain.startswith("www."):
+        own_domain = own_domain[4:]
+
     try:
         async with async_playwright() as p:
             browser = await p.chromium.launch(
@@ -321,7 +385,9 @@ async def scrape(url, timeout):
                 debug_notes.append(f"attempt1: {err}")
             elif _is_blocked(html, text):
                 debug_notes.append("attempt1: blocked/CAPTCHA")
-            elif _is_thin(text, html):
+            elif _is_bare_domain_title(title, own_domain):
+                debug_notes.append(f"attempt1: bare-domain title stub ({title!r})")
+            elif _is_thin(text, html, own_domain=own_domain):
                 debug_notes.append(
                     f"attempt1: too thin ({len(text.strip())} chars) | preview: {_preview(text)!r}"
                 )
@@ -329,7 +395,9 @@ async def scrape(url, timeout):
                 debug_notes.append(f"attempt1 OK | text={len(text):,} chars")
 
             attempt1_ok = (
-                not err and not _is_blocked(html, text) and not _is_thin(text, html)
+                not err and not _is_blocked(html, text)
+                and not _is_bare_domain_title(title, own_domain)
+                and not _is_thin(text, html, own_domain=own_domain)
             )
 
             # ---- Attempt 2 (patient retry) ----
@@ -345,7 +413,9 @@ async def scrape(url, timeout):
                     debug_notes.append(f"attempt2: {err2}")
                 elif _is_blocked(html2, text2):
                     debug_notes.append("attempt2: blocked/CAPTCHA")
-                elif _is_thin(text2, html2):
+                elif _is_bare_domain_title(title2, own_domain):
+                    debug_notes.append(f"attempt2: bare-domain title stub ({title2!r})")
+                elif _is_thin(text2, html2, own_domain=own_domain):
                     debug_notes.append(
                         f"attempt2: too thin ({len(text2.strip())} chars) | preview: {_preview(text2)!r}"
                     )
@@ -355,16 +425,26 @@ async def scrape(url, timeout):
                 # Prefer attempt 2's result if it's usable, even if
                 # attempt 1 produced *some* non-empty output -- a thin
                 # or blocked attempt 1 result is not a valid fallback.
-                if not err2 and not _is_blocked(html2, text2) and not _is_thin(text2, html2):
+                if (
+                    not err2 and not _is_blocked(html2, text2)
+                    and not _is_bare_domain_title(title2, own_domain)
+                    and not _is_thin(text2, html2, own_domain=own_domain)
+                ):
                     html, text, title = html2, text2, title2
 
             await browser.close()
 
             final_blocked = _is_blocked(html, text)
-            final_thin = _is_thin(text, html)
+            final_bare_title = _is_bare_domain_title(title, own_domain)
+            final_thin = _is_thin(text, html, own_domain=own_domain)
 
             if final_blocked:
                 result["debug"] = "Playwright: blocked/CAPTCHA | " + " | ".join(debug_notes)
+                return result
+            if final_bare_title:
+                result["debug"] = (
+                    f"Playwright: bare-domain title stub ({title!r}) | " + " | ".join(debug_notes)
+                )
                 return result
             if final_thin:
                 result["debug"] = (
