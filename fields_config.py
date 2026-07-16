@@ -95,6 +95,34 @@ SOURCE_FIELDS = {
         "Category", "Logo",
     ],
     
+    "fyple.com": [
+        "Name",	"Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL",	"Keywords",	"Description",	"Hours",
+        "Social Media Links",	"GBP Link",	"Business Email",	"Category",	"Logo",	"Photos",
+    ],
+    
+    "merchantcircle.com": [
+        "Name",	"Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL",	"Description",	"Hours",
+        "Social Media Links",	"GBP Link",	"Category",	"Logo",
+    ],
+    
+    "globalbusinessdirectory.us": [
+        "Name",	"Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL",	"Keywords",	"Description",
+        "Social Media Links",	"Category",	"Logo",
+    ],
+    "chamberofcommerce.com": [
+        # No GBP Link: the only Google Maps references on this template
+        # are a bare directions search-query link and a Maps Embed API
+        # iframe URL carrying the page's own API key -- neither is a
+        # real, shareable Google Business Profile link (see
+        # parse_chamberofcommerce in extractor.py for details).
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Keywords", "Description", "Hours",
+        "Social Media Links", "Business Email", "Category", "Logo", "Photos",
+    ],
+    
     
     
 }
