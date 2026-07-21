@@ -113,18 +113,51 @@ SOURCE_FIELDS = {
         "Social Media Links",	"Category",	"Logo",
     ],
     "chamberofcommerce.com": [
-        # No GBP Link: the only Google Maps references on this template
-        # are a bare directions search-query link and a Maps Embed API
-        # iframe URL carrying the page's own API key -- neither is a
-        # real, shareable Google Business Profile link (see
-        # parse_chamberofcommerce in extractor.py for details).
         "Name", "Street", "City", "State", "Zipcode", "Country",
         "Phone", "Website URL", "Keywords", "Description", "Hours",
         "Social Media Links", "Business Email", "Category", "Logo", "Photos",
     ],
-    
-    
-    
+    "trueen.com": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Description", "Hours",
+        "Social Media Links", "Category",
+    ],
+    "citysquares.com": [
+        "Name", "Street", "City", "State", "Zipcode",
+    ],
+    "b2bco.com": [
+        "Name", "Street", "City", "State", "Country",
+        "Phone", "Website URL", "Keywords", "Description",
+        "Hours", "Business Email", "Category", "Logo",
+    ],
+    "find-us-here.com": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Description", "Business Email",
+        "Category", "Logo",
+    ],
+    "a-zbusinessfinder.com": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Description", "Business Email",
+        "Category", "Logo",
+    ],
+    "cybo.com": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Description", "Hours",
+        "Social Media Links", "GBP Link", "Category", "Logo",
+    ],
+    "linkcentre.com": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Description", "Social Media Links",
+        "Business Email", "Category", "Logo",
+    ],
+    "band.us": [
+        "Name", "Street", "City", "State", "Zipcode",
+        "Phone", "Business Email", "Description", "Keywords",
+    ],
+    "americansearch.info": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Description", "Category", "Logo",
+    ],
 }
 
 VISUAL_FIELDS = {"Logo", "Photos"}
