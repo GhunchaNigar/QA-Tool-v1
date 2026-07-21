@@ -102,6 +102,220 @@ Supports (auto-detected by domain):
                              API iframe URL carrying the page's own API
                              key -- see parse_chamberofcommerce for
                              details)
+  - trueen.com             -- static HTML, fetched with requests
+                             (verified against the real page source:
+                             Street/City/State/Zipcode, Phone, Website
+                             URL, and the "Who is X?" Description are
+                             read from the page's own @type: FAQPage
+                             JSON-LD block first -- cleanest source,
+                             no markup to strip -- with the @type:
+                             LocalBusiness JSON-LD block and then
+                             verified CSS selectors [h1.header-titlex,
+                             span.single-page-category a, the
+                             fa-map-marker/fa-passport icon lines,
+                             p.single-page-phone, and the "View
+                             website" button (a.view-button with
+                             target="_blank" + rel="nofollow", which
+                             distinguishes it from the "Write a
+                             Review" button sharing the same class)]
+                             as fallbacks; no genuine Hours, Business
+                             Email, Keywords, Social Media Links, GBP
+                             Link, Logo, or Photos were found on the
+                             (unclaimed) listing this was built
+                             against -- see parse_trueen for details)
+  - citysquares.com        -- static HTML, fetched with requests (no
+                             JSON-LD on this template; every field
+                             comes from a verified CSS selector --
+                             h1.listing, div.logo img, div.phone.element,
+                             #full-address [a "Street, City, State,
+                             Zipcode" string with FOUR comma-separated
+                             segments -- Zip is its own segment here,
+                             unlike blinx.biz's shape, so it needs its
+                             own splitter, _split_citysquares_address],
+                             div.website.element's rel="nofollow" link,
+                             div.socials.section, div.hours.section,
+                             div.about.section, the breadcrumb's last
+                             "/cat/" link for Category, and
+                             div.images.section for Photos; Business
+                             Email is Cloudflare-obfuscated, same shape
+                             as chamberofcommerce.com, decoded via the
+                             shared _find_cf_email() helper; no
+                             Country or Keywords field exists on this
+                             template, and GBP Link is left blank for
+                             the same reason as chamberofcommerce.com/
+                             trueen.com -- the only Google Maps
+                             reference is a Maps Embed API iframe URL
+                             carrying the page's own API key, not a
+                             real shareable GBP link -- see
+                             parse_citysquares for details)
+  - b2bco.com              -- static HTML, fetched with requests
+                             (SmartPortal-based B2B marketplace/directory
+                             template; Name comes from the profile-header
+                             <h1> rather than <title>/og:title, which
+                             carry a " - Marketplace and Business
+                             Network - B2BCO" suffix; Street/City/State/
+                             Country are read from the labeled "General
+                             Information" section rather than a combined
+                             address string; Website URL is the visible
+                             anchor text, since the href is an internal
+                             "/l/?channel=..." click-tracking redirect;
+                             Description/Keywords come from the
+                             "Business Summary"/"Business Keywords"
+                             labeled blocks, falling back to the meta
+                             tags; Category is the first "Categories"
+                             breadcrumb link; no genuine Hours or
+                             Business Email were found on the tested
+                             (unclaimed/"not complete") listing this was
+                             built against -- see parse_b2bco for
+                             details)
+  - find-us-here.com       -- fetched via Playwright (JS-rendered;
+                             confirmed via DevTools that the Business
+                             Email <a href="mailto:..."> is written into
+                             the DOM by an inline <script> and is absent
+                             from the raw server HTML a plain requests
+                             fetch would see). Most of this parser was
+                             built from a text/markdown extraction of
+                             the live page rather than raw HTML source,
+                             so it locates fields by their on-page label
+                             -- "Address", "Phone", "Web", "Category:"
+                             -- instead of fixed CSS classes; Name from
+                             <h1>; Street/City/State/Zipcode split from
+                             the multi-line block between the "Address"
+                             and "Phone" labels; Country from the last
+                             token of the "<City> <State abbr>
+                             <Country>" subheading; Website URL is the
+                             first external, non-directory/non-social
+                             link after the "Web" label; Business Email
+                             is the confirmed real mailto: link scoped
+                             to its <span itemprop="email"> wrapper
+                             (Cloudflare-style obfuscation kept only as
+                             a fallback, not the primary path);
+                             Category/Description come from a
+                             "Category: X" line and the description
+                             block immediately after it; if any field
+                             doesn't match once run against a live
+                             fetch, see parse_findushere to tighten it
+                             with a verified selector)
+  - a-zbusinessfinder.com  -- fetched via Playwright, same reasoning as
+                             find-us-here.com (this is the same
+                             directory-network template family, so its
+                             Business Email is assumed to be JS-injected
+                             too, but that specific assumption is NOT
+                             yet confirmed via DevTools for this domain
+                             -- if it comes back blank on a live run,
+                             inspect the "Email" row and report back).
+                             Built from a text/markdown extraction, same
+                             as find-us-here.com, with confirmed
+                             structural differences from it: the
+                             Address/Phone/Email/Website block is a
+                             bullet list where "Physical Address" shares
+                             its line with the first address line
+                             (rather than being its own heading); there
+                             is no "Category: X" line anywhere on the
+                             page (Category instead comes from the last
+                             crumb of the "»"-separated breadcrumb
+                             trail) and no <meta property="og:image">
+                             tag at all (confirmed absent -- Logo comes
+                             from the listing's own photo <img>
+                             instead); Description comes from the
+                             "Business/Community Description" section
+                             (not "About <Business>" like find-us-
+                             here.com) -- see parse_azbusinessfinder for
+                             details)
+
+  - cybo.com               -- static HTML, fetched with requests. Built
+                             from a text/markdown extraction of the live
+                             page (not raw view-source), same caveat as
+                             find-us-here.com/a-zbusinessfinder.com --
+                             re-check against a live fetch before relying
+                             on it. What IS confirmed from the real href
+                             values seen in that extraction: Website URL
+                             and every Social Media Links entry are
+                             wrapped in the same "/r/biz/web?..." click-
+                             tracking redirect, distinguished from each
+                             other only by a "social_tag=" query param
+                             (absent on the Website link, present -- fb/
+                             tw/yt/linkedin/instagram/Tiktok -- on social
+                             icons); the real destination is recoverable
+                             from the anchor's visible text for Website
+                             and for TikTok specifically, but NOT for the
+                             other social icons, which render as bare
+                             icon-name text with no visible URL anywhere
+                             in the page -- those are left pointing at
+                             the tracking redirect itself, not a real
+                             profile URL. Phone is also not a real tel:
+                             link but a "/phone/how-to-call/..." redirect
+                             whose visible text is the real number.
+                             Street/City/State/Zipcode/Country come from
+                             a labeled "Address" block ("City: X",
+                             "State: X", "Postal Code: X", "Country: X");
+                             Category prefers the "Categories: X" label
+                             in the About section over the shorter
+                             category tag/pill under the header; GBP Link
+                             is left blank since the only Google-Maps
+                             reference is a plain Maps *search* query
+                             built from the street address, not a real
+                             Business Profile link; see parse_cybo for
+                             details)
+  - band.us                -- static HTML, fetched with requests (Naver
+                             BAND group "intro" pages; despite the page
+                             being a client-hydrated app shell, the
+                             entire business record -- Owner Name,
+                             Address, Phone, Business Email, About us,
+                             Related Searches -- is pre-baked into a
+                             single newline-separated meta
+                             name="description" string, duplicated
+                             verbatim in og:description/twitter:
+                             description, so no Playwright render is
+                             needed; Business Name comes from og:title
+                             with the fixed " | BAND" suffix stripped;
+                             no genuine Country, Website URL, Hours,
+                             Social Media Links, GBP Link, Category, or
+                             Photos exist anywhere on this template --
+                             see parse_band for details)
+  - americansearch.info    -- static HTML, fetched with requests
+                             (Brilliant-Directories-family template, no
+                             LocalBusiness JSON-LD block; Name from the
+                             profile h1 (og:title is site-branded "X on
+                             AMERICAN SEARCH"); Street/City/State/Zip
+                             from schema.org streetAddress microdata;
+                             Country and Category both read from the
+                             breadcrumb (Home > Country > Category >
+                             business name); Phone from schema.org
+                             telephone microdata; Website URL from the
+                             itemprop="url" weblink anchor; Description
+                             from the "About my Business" free-text
+                             block; Logo from the profile photo; no
+                             genuine Hours, Social Media Links, or GBP
+                             Link exist on the tested listing -- see
+                             parse_americansearch for details)
+  - linkcentre.com         -- static HTML, fetched with requests. Built
+                             from the site's own real HTML source (not a
+                             text/markdown reconstruction, unlike cybo.com
+                             above) -- verified selectors throughout.
+                             Street/City/Zipcode/Country/Phone come from
+                             the business:contact_data:* OG meta tags,
+                             same reliable shape as merchantcircle.com;
+                             State has no meta equivalent, so it's read
+                             from the @graph-wrapped JSON-LD
+                             LocalBusiness block's address.addressRegion
+                             instead, which also backstops every other
+                             field and supplies Website URL (sameAs[0]),
+                             Logo, Description, and Category (knowsAbout,
+                             confirmed identical to the "Listed In" pill
+                             text used as its own fallback); Name prefers
+                             the profile <h1> over og:title, which on
+                             this template carries a trailing " |
+                             Restoration Services Reviews & Info |
+                             LinkCentre" suffix. Social Media Links and
+                             Business Email are intentionally left blank
+                             -- confirmed on the tested (unclaimed/free)
+                             listing that every social/email link on the
+                             page belongs to LinkCentre itself (its own
+                             Facebook/X/LinkedIn share-intent buttons and
+                             an Organization-level support@linkcentre.com
+                             in the JSON-LD), not the business -- see
+                             parse_linkcentre for details)
 
 Any other domain falls back to a best-effort generic parser fetched with
 requests; if that response looks like a bot-check page, it automatically
@@ -3819,10 +4033,446 @@ def parse_chamberofcommerce(url, html):
 
 
 # ==========================================================
-# Generic best-effort parser (unmapped domains)
+# Site parser: trueen.com
 # ==========================================================
+#
+# Built and verified against the listing's actual HTML (not just a
+# rendered/markdown view). This template carries two JSON-LD blocks
+# that make extraction unusually clean for a directory site:
+#
+#   1. @type: FAQPage -- its answer text is the cleanest source for
+#      Street/City/State/Zipcode, Phone, Website URL, and the "Who is
+#      X?" narrative used as Description: no icon markup or nested-tag
+#      cleanup needed, just the raw answer string. Checked first for
+#      each of those fields.
+#   2. @type: LocalBusiness -- name/telephone/address/description, used
+#      as a secondary cross-check/fallback if the FAQPage block above
+#      is ever missing. NOTE: on the tested listing this block's
+#      address.addressLocality holds the *entire* "Street, City, State
+#      Zip" string (not just the locality) -- addressLocality is still
+#      run through the same _split_trueen_address() splitter here
+#      rather than treated as a real single-field locality.
+#
+# CSS fallbacks (verified selectors, not guesses) back up both JSON-LD
+# blocks in case a listing variant omits one:
+#   - Business Name:  h1.header-titlex
+#   - Category:       span.single-page-category a
+#   - Country:         the <a> inside the <p> with the fa-passport icon
+#   - Street/City/etc: the <p> with the fa-map-marker icon
+#   - Phone:           p.single-page-phone
+#   - Website URL:     the "View website" button -- a.view-button with
+#                       target="_blank" + rel="nofollow", which is what
+#                       distinguishes it from the "Write a Review"
+#                       button (also class="view-button", but href="#"
+#                       and no target/rel)
+#   - Description:     div.company-bio (note: this template nests <p>
+#                       tags without closing them -- BeautifulSoup/lxml
+#                       auto-repairs that on parse, so paragraph text is
+#                       still read out correctly via find_all("p"))
+#
+# The listing tested (Focal Newark, unclaimed/free-tier) has no Hours,
+# Business Email, Keywords, Social Media Links, GBP Link, Logo, or
+# Photos anywhere on the page:
+#   - The "Share This Listing" icons are share-intent buttons
+#     (href="#", the target URL is built in an onclick handler that
+#     opens facebook.com/sharer.php/twitter.com/intent/etc for THIS
+#     listing's own URL) -- not the business's own social profiles.
+#   - The only mailto: link tied to the listing is the "Share via
+#     Email" CTA (mailto:?subject=...&body=...), with no address
+#     before the "?" -- not a real business email.
+#   - TRUEen's own footer (support/info@trueen.com, its Facebook/
+#     Twitter/LinkedIn handles, WhatsApp number) must NOT be mistaken
+#     for the business's own contact info -- explicitly excluded below.
+#   - og:image is TRUEen's own generic share-card image
+#     (images/logo/og-image-trueen.png), not the business's logo.
+# A claimed/premium listing may expose more of these (the page itself
+# says "Do you want to add product, services, areas and many more
+# features? Just upgrade your business now."), so best-effort
+# extraction is still attempted for Email/Logo/Social; fields_config.py's
+# trueen.com entry can be widened later once that's confirmed without
+# touching this function.
 
-def parse_generic(url, html):
+_TRUEEN_OWN_EMAIL_DOMAINS = ("trueen.com",)
+_TRUEEN_OWN_SOCIAL_HANDLES = (
+    "facebook.com/trueencom",
+    "twitter.com/trueen_com",
+    "linkedin.com/company/trueen-com",
+)
+
+
+def _split_trueen_address(text):
+    """Splits a single "Street[, Suite], City, State Zip" string (this
+    template renders the full address as one run of text, comma-
+    separated, with no per-field markup -- confirmed both in the
+    visible <p class="fa-map-marker"> line and in the JSON-LD's
+    address.addressLocality) into parts. Pulls the trailing ZIP off
+    the end first since it's the only fixed-format anchor; State is
+    then whatever comma-segment is left immediately before it; City is
+    the segment before that; everything earlier (which may itself
+    contain commas, e.g. a ", Suite 305" clause) is rejoined as Street.
+
+    "131 Continental Dr, Suite 305, Newark, Delaware 19713" ->
+    Street="131 Continental Dr, Suite 305", City="Newark",
+    State="Delaware", Zipcode="19713"
+    """
+    result = {"Street": "", "City": "", "State": "", "Zipcode": ""}
+
+    text = clean(text)
+    if not text:
+        return result
+
+    zip_match = re.search(r"(\d{5}(?:-\d{4})?)\s*$", text)
+    if zip_match:
+        result["Zipcode"] = zip_match.group(1)
+        text = text[:zip_match.start()].strip().rstrip(",").strip()
+
+    parts = [p.strip() for p in text.split(",") if p.strip()]
+
+    if parts:
+        result["State"] = parts.pop()
+    if parts:
+        result["City"] = parts.pop()
+    if parts:
+        result["Street"] = ", ".join(parts)
+
+    return result
+
+
+def _trueen_faq_answers(soup):
+    """Reads the @type: FAQPage JSON-LD block into a
+    {lowercased question: raw answer text} dict. Returns {} if the
+    block isn't present (older/variant listings)."""
+    answers = {}
+    for script in soup.find_all("script", type="application/ld+json"):
+        if not script.string:
+            continue
+        try:
+            data = json.loads(script.string)
+        except Exception:
+            continue
+        if not isinstance(data, dict) or data.get("@type") != "FAQPage":
+            continue
+        for item in data.get("mainEntity", []):
+            if not isinstance(item, dict):
+                continue
+            question = clean(item.get("name", ""))
+            accepted = item.get("acceptedAnswer", {})
+            text = accepted.get("text", "") if isinstance(accepted, dict) else ""
+            if question and text:
+                answers[question.lower()] = text
+    return answers
+
+
+def _trueen_local_business_jsonld(soup):
+    """Reads the @type: LocalBusiness JSON-LD block. Returns {} if not
+    present."""
+    for script in soup.find_all("script", type="application/ld+json"):
+        if not script.string:
+            continue
+        try:
+            data = json.loads(script.string)
+        except Exception:
+            continue
+        if isinstance(data, dict) and data.get("@type") == "LocalBusiness":
+            return data
+    return {}
+
+
+def parse_trueen(url, html):
+
+    soup = BeautifulSoup(html, "lxml")
+    business = empty_business()
+
+    faq = _trueen_faq_answers(soup)
+    local_business = _trueen_local_business_jsonld(soup)
+
+    # ---- Business Name ----
+    h1 = soup.select_one("h1.header-titlex") or soup.find("h1")
+    if h1:
+        business["Business Name"] = clean(h1.get_text())
+    if not business["Business Name"] and local_business.get("name"):
+        business["Business Name"] = clean(local_business["name"])
+    if not business["Business Name"]:
+        og_title = soup.find("meta", property="og:title")
+        if og_title and og_title.get("content"):
+            # Drop the " - <tagline>, <location> - TRUEen" suffix this
+            # template appends to every og:title.
+            business["Business Name"] = clean(og_title["content"].split(" - ")[0])
+
+    # ---- Category ----
+    # Rendered once near the top ("Unclaimed ! . <category>") and again
+    # at the bottom ("More Recent Businesses" link) with the identical
+    # href -- select_one takes the first (top) match either way.
+    cat_link = soup.select_one("span.single-page-category a") or \
+        soup.select_one('a[href*="/business-listing/category/"]')
+    if cat_link:
+        business["Category"] = clean(cat_link.get_text())
+
+    # ---- Country ----
+    country_icon = soup.select_one("i.fa-passport")
+    country_link = (
+        country_icon.find_parent("p").select_one("a") if country_icon and country_icon.find_parent("p") else None
+    ) or soup.select_one('a[href*="/business-listing/country/"]')
+    if country_link:
+        business["Country"] = clean(country_link.get_text())
+    elif local_business.get("address", {}).get("addressCountry"):
+        business["Country"] = clean(local_business["address"]["addressCountry"])
+
+    # ---- Street / City / State / Zipcode ----
+    # Priority: FAQPage's "headquarters located" answer (cleanest, no
+    # markup to strip) -> LocalBusiness JSON-LD's addressLocality
+    # (confirmed on this template to hold the full address string, not
+    # just a locality) -> the visible fa-map-marker line as a last
+    # resort. All three feed the same splitter since they're all the
+    # same "Street, City, State Zip" single-string shape.
+    address_text = None
+    for question, text in faq.items():
+        if "headquarters located" in question:
+            address_text = text
+            break
+
+    if not address_text:
+        addr_locality = local_business.get("address", {}).get("addressLocality")
+        if addr_locality:
+            address_text = addr_locality
+
+    if not address_text:
+        marker_icon = soup.select_one("i.fa-map-marker")
+        if marker_icon and marker_icon.find_parent("p"):
+            address_text = marker_icon.find_parent("p").get_text()
+
+    if address_text:
+        parts = _split_trueen_address(address_text)
+        business["Street"] = parts["Street"]
+        business["City"] = parts["City"]
+        business["State"] = parts["State"]
+        business["Zipcode"] = parts["Zipcode"]
+
+    # ---- Phone ----
+    for question, text in faq.items():
+        if "contact phone number" in question and re.search(r"\d{5,}", text):
+            business["Phone"] = clean(text)
+            break
+
+    if not business["Phone"] and local_business.get("telephone"):
+        business["Phone"] = clean(local_business["telephone"])
+
+    if not business["Phone"]:
+        phone_p = soup.select_one("p.single-page-phone")
+        if phone_p:
+            business["Phone"] = clean(phone_p.get_text())
+
+    if not business["Phone"]:
+        tel = soup.select_one('a[href^="tel:"]')
+        if tel and tel.get("href"):
+            business["Phone"] = tel["href"].replace("tel:", "").strip()
+
+    # ---- Website URL ----
+    # The "View website" button is the reliable CSS target: it's the
+    # only a.view-button on the page with target="_blank" AND
+    # rel="nofollow" -- the "Write a Review" button shares the same
+    # view-button class but has href="#" and neither attribute.
+    website_link = soup.select_one('a.view-button[target="_blank"][rel="nofollow"]')
+    if website_link and website_link.get("href"):
+        href = website_link["href"].strip()
+        if href and not href.lower().startswith("javascript:"):
+            business["Website URL"] = href
+
+    if not business["Website URL"]:
+        for question, text in faq.items():
+            if "official website" in question and text.strip().lower().startswith(("http://", "https://")):
+                business["Website URL"] = clean(text)
+                break
+
+    # ---- Description ("Who is X?" narrative -- the only genuine
+    #      free-text bio on the page) ----
+    for question, text in faq.items():
+        # Exclude the "Who is the Owner/CEO/Representative of X?"
+        # question -- same "Who is" prefix, different answer entirely
+        # (and not a field this schema tracks).
+        if question.startswith("who is") and "owner" not in question and "ceo" not in question:
+            business["Description"] = clean_multiline(text)
+            break
+
+    if not business["Description"]:
+        bio = soup.select_one("div.company-bio")
+        if bio:
+            paragraphs = [clean(p.get_text()) for p in bio.find_all("p")]
+            paragraphs = [p for p in paragraphs if p]
+            if paragraphs:
+                business["Description"] = "\n".join(paragraphs)
+            else:
+                business["Description"] = clean(bio.get_text())
+
+    if not business["Description"] and local_business.get("description"):
+        business["Description"] = clean(local_business["description"])
+
+    if not business["Description"]:
+        meta_desc = soup.find("meta", attrs={"name": "description"})
+        if meta_desc and is_meaningful(meta_desc.get("content", "")):
+            business["Description"] = clean(meta_desc["content"])
+
+    # ---- Business Email (best-effort; none present on the tested
+    #      listing) ----
+    # The only mailto: tied to the listing itself is the "Share via
+    # Email" CTA (mailto:?subject=...&body=...) with no address before
+    # the "?", and TRUEen's own support/info@trueen.com footer emails
+    # aren't the business's -- both are excluded here.
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        if not href.lower().startswith("mailto:"):
+            continue
+        addr = href[len("mailto:"):].split("?")[0].strip()
+        if not addr:
+            continue
+        if any(addr.lower().endswith("@" + d) for d in _TRUEEN_OWN_EMAIL_DOMAINS):
+            continue
+        business["Business Email"] = addr
+        break
+
+    # ---- Logo (best-effort; none present on the tested listing) ----
+    # og:image on this template is TRUEen's own generic share-card
+    # image (images/logo/og-image-trueen.png), not the business's own
+    # logo, so it's deliberately NOT used as a fallback here the way
+    # other parsers in this file use og:image.
+    for img in soup.find_all("img", src=True):
+        src = img["src"]
+        low = src.lower()
+        if "trueen-logo" in low or "og-image-trueen" in low or "loader.gif" in low:
+            continue
+        alt = clean(img.get("alt", "")).lower()
+        if business["Business Name"] and business["Business Name"].lower() in alt:
+            business["Logo"] = urljoin(url, src)
+            break
+
+    # ---- Social Media Links (best-effort; none present on the tested
+    #      listing) ----
+    # The "Share This Listing" icons are share-intent buttons
+    # (href="#", real target built in an onclick handler pointing at
+    # facebook.com/sharer.php etc for THIS LISTING's own URL, not a
+    # link to the business's own social profile), and TRUEen's own
+    # footer social links (Facebook/Twitter/LinkedIn "TrueEnCom"-style
+    # handles) belong to TRUEen itself, not the business -- both are
+    # excluded here.
+    for a in soup.find_all("a", href=True):
+        href = a["href"].strip()
+        if not href or href == "#" or href.lower().startswith("javascript:"):
+            continue
+        low = href.lower()
+        if any(handle in low for handle in _TRUEEN_OWN_SOCIAL_HANDLES):
+            continue
+        for domain, network in SOCIAL_DOMAINS.items():
+            if _hostname_matches_social_domain(href, domain):
+                business["Social Media Links"][network] = href
+
+    return business
+
+
+# ==========================================================
+# Site parser: citysquares.com
+# ==========================================================
+#
+# Static HTML, fetched with requests. Verified against the real page
+# source (WrightWay Emergency Services / Nokomis, FL listing) -- no
+# JSON-LD on this template, so every field below comes from a
+# confirmed CSS selector rather than a structured-data block:
+#   - Business Name:  h1.listing
+#   - Logo:            div.logo img (the business's own uploaded
+#                       photo, hosted on the site's S3 bucket -- not
+#                       to be confused with the CitySquares site logo
+#                       in the top nav, which lives outside this div)
+#   - Phone:           div.phone.element
+#   - Street/City/
+#     State/Zipcode:   span#full-address, a single "Street, City,
+#                       State, Zipcode" string with FOUR comma-
+#                       separated segments (Zip is its OWN segment
+#                       here, not merged into the State segment the
+#                       way _split_blinx_address expects) -- needs its
+#                       own splitter, _split_citysquares_address.
+#   - Business Email:  Cloudflare's "email protection" obfuscation
+#                       (identical markup shape to chamberofcommerce.com
+#                       -- decoded via the shared _find_cf_email()
+#                       helper already used there).
+#   - Website URL:     div.website.element a[rel="nofollow"]
+#   - Social Media
+#     Links:           div.socials.section -- Instagram/Twitter/
+#                       Facebook/LinkedIn/YouTube anchors, matched
+#                       generically against SOCIAL_DOMAINS the same
+#                       way parse_trueen and others do.
+#   - Hours:           div.hours.section (label "Business hours" is a
+#                       heading, not the value -- the value is the
+#                       <p> beneath it).
+#   - Description:     div.about.section's "About us" paragraph.
+#   - Category:        the breadcrumb's LAST link whose href starts
+#                       with "/cat/" (the breadcrumb also includes a
+#                       "/p/<state>/<city>" location crumb earlier,
+#                       which is not a category and is skipped).
+#   - Photos:          all <img> inside div.images.section (the
+#                       gallery slideshow) -- kept distinct from Logo.
+#
+# No Country anywhere on the page (state names like "Florida" imply
+# the US but that's not the same as a labeled Country field, so it's
+# deliberately left blank rather than assumed), no Keywords field
+# exists on this template, and GBP Link is left blank for the same
+# reason as chamberofcommerce.com and trueen.com: the only Google Maps
+# reference is a Maps Embed API iframe URL carrying the page's own API
+# key, not a real shareable Google Business Profile link.
+
+def _split_citysquares_address(text):
+    """Splits a single "Street, City, State, Zipcode" string -- FOUR
+    comma-separated segments on this template, with Zip as its own
+    trailing segment (unlike blinx.biz's "Street, City, ST ,Zip" shape,
+    where state+zip share a segment -- _split_blinx_address's "last
+    segment is state+zip together" assumption doesn't hold here, hence
+    a dedicated splitter).
+
+    "300 Triple Diamond Boulevard, Nokomis, Florida, 34275" ->
+    Street="300 Triple Diamond Boulevard", City="Nokomis",
+    State="Florida", Zipcode="34275"
+    """
+    result = {"Street": "", "City": "", "State": "", "Zipcode": ""}
+
+    parts = [p.strip() for p in clean(text).split(",") if p.strip()]
+    if not parts:
+        return result
+
+    if re.match(r"^\d{5}(?:-\d{4})?$", parts[-1]):
+        result["Zipcode"] = parts.pop()
+
+    if parts:
+        result["State"] = parts.pop()
+    if parts:
+        result["City"] = parts.pop()
+    if parts:
+        result["Street"] = ", ".join(parts)
+
+    return result
+
+
+def parse_citysquares(url, html):
+
+    soup = BeautifulSoup(html, "lxml")
+    business = empty_business()
+
+    # ---- Business Name ----
+    h1 = soup.select_one("h1.listing")
+    if h1:
+        business["Business Name"] = clean(h1.get_text())
+
+    # ---- Street / City / State / Zipcode ----
+    address_span = soup.select_one("#full-address")
+    if address_span:
+        parts = _split_citysquares_address(address_span.get_text())
+        business["Street"] = parts["Street"]
+        business["City"] = parts["City"]
+        business["State"] = parts["State"]
+        business["Zipcode"] = parts["Zipcode"]
+
+
+    return business
+
+
+
     """Best-effort fallback for domains without a dedicated parser above.
     Covers the common patterns seen across both sites so far: JSON-LD
     LocalBusiness, business:contact_data:* meta, plain meta tags,
@@ -3922,6 +4572,1018 @@ def parse_generic(url, html):
 
 
 # ==========================================================
+# Site parser: b2bco.com
+# ==========================================================
+# Static HTML, fetched with requests (SmartPortal-based B2B marketplace/
+# directory template). Name comes from the profile-header <h1>, not
+# <title>/og:title, since those are suffixed with " - Marketplace and
+# Business Network - B2BCO"; Street/City/State/Country are read from the
+# labeled "General Information" section's own spans/links, not a single
+# combined address string; Website URL is the visible text of the
+# website anchor (e.g. "www.haqq.ai"), not its href, which is an
+# internal "/l/?channel=<slug>" outbound-click-tracking redirect;
+# Description and Keywords come from the "Business Summary" and
+# "Business Keywords" labeled blocks under the Description section (the
+# real <meta name="keywords"> tag is used as a fallback since some
+# listings may omit the in-page block); Category is the first crumb
+# under "Categories" (skips the duplicate "<Category> in <Country>"
+# link that follows it); Logo is the profile-header logo image; Hours
+# and Business Email were not present anywhere on the tested (unclaimed/
+# "not complete") listing this was built against, so they're left
+# blank when absent -- see parse_b2bco for details.
+
+def parse_b2bco(url, html):
+
+    soup = BeautifulSoup(html, "lxml")
+    business = empty_business()
+
+    # ---- Business Name (profile header h1, not <title>/og:title, which
+    # carry a " - Marketplace and Business Network - B2BCO" suffix) ----
+    name_el = soup.select_one("div.business.s-title h1")
+    if name_el:
+        business["Business Name"] = clean(name_el.get_text())
+
+    # ---- Address (labeled "General Information" section) ----
+    for addr_div in soup.select("div.Businessaddress"):
+        text = clean(addr_div.get_text())
+        if re.match(r"^Address:", text, flags=re.I):
+            business["Street"] = re.sub(r"^Address:\s*", "", text, flags=re.I)
+            break
+
+    country_el = soup.select_one("div.Businesscountry a")
+    if country_el:
+        business["Country"] = clean(country_el.get_text())
+
+    state_el = soup.select_one("div.countrypart a")
+    if state_el:
+        business["State"] = clean(state_el.get_text())
+
+    city_el = soup.select_one("div.businesscity a")
+    if city_el:
+        business["City"] = clean(city_el.get_text())
+
+    # ---- Phone (tel: link) ----
+    phone_el = soup.select_one("div.Businessphone a[href^='tel:']")
+    if phone_el:
+        business["Phone"] = clean(phone_el.get_text())
+
+    # ---- Website URL (visible anchor text, not its /l/?channel=...
+    # click-tracking redirect href) ----
+    website_el = soup.select_one("div.Businessweb a")
+    if website_el:
+        site_text = clean(website_el.get_text())
+        if site_text:
+            business["Website URL"] = site_text
+
+    # ---- Description ("Business Summary" labeled block) ----
+    desc_label = soup.find(string=re.compile(r"Business Summary", re.I))
+    if desc_label:
+        desc_block = desc_label.find_parent("div")
+        if desc_block:
+            summary_div = desc_block.find_next_sibling("div", class_="comtext")
+            if summary_div:
+                desc_text = clean(summary_div.get_text())
+                if is_meaningful(desc_text):
+                    business["Description"] = desc_text
+    if not business["Description"]:
+        meta_desc = soup.find("meta", attrs={"name": "description"})
+        if meta_desc:
+            desc = clean(meta_desc.get("content", ""))
+            if is_meaningful(desc):
+                business["Description"] = desc
+
+    # ---- Keywords ("Business Keywords" labeled block, falling back to
+    # <meta name="keywords">) ----
+    kw_label = soup.find(string=re.compile(r"Business Keywords", re.I))
+    if kw_label:
+        kw_block = kw_label.find_parent("div")
+        if kw_block:
+            kw_div = kw_block.find_next_sibling("div", class_="comtext")
+            if kw_div:
+                kw_text = clean(kw_div.get_text())
+                if is_meaningful(kw_text):
+                    business["Keywords"] = kw_text
+    if not business["Keywords"]:
+        meta_kw = soup.find("meta", attrs={"name": "keywords"})
+        if meta_kw:
+            kw_raw = clean(meta_kw.get("content", ""))
+            if is_meaningful(kw_raw):
+                business["Keywords"] = kw_raw
+
+    # ---- Category (first crumb under "Categories"; skips the duplicate
+    # "<Category> in <Country>" link that follows it in the same <li>) ----
+    category_el = soup.select_one("ul.b-activities li a")
+    if category_el:
+        business["Category"] = clean(category_el.get_text())
+
+    # ---- Logo (profile header logo image) ----
+    logo_el = soup.select_one("div.business.s-title div.logo img[src]")
+    if logo_el:
+        business["Logo"] = urljoin(url, logo_el["src"])
+    if not business["Logo"]:
+        og_image = soup.find("meta", property="og:image")
+        if og_image and og_image.get("content"):
+            business["Logo"] = urljoin(url, og_image["content"])
+
+    # ---- Business Email (mailto: link, if present) ----
+    email_el = soup.select_one('a[href^="mailto:"]')
+    if email_el:
+        business["Business Email"] = email_el["href"].replace("mailto:", "").split("?")[0].strip()
+
+    # ---- Hours (not present anywhere on the tested "not complete"
+    # listing -- left blank if absent) ----
+
+    # ---- GBP Link (a genuine Google Maps / Business Profile link, if
+    # present -- excludes the page's own generic map/barcode widgets,
+    # which aren't links to an external Maps listing) ----
+    gbp_link = soup.select_one('a[href*="google.com/maps"], a[href*="g.page"], a[href*="goo.gl/maps"]')
+    if gbp_link and gbp_link.get("href"):
+        business["GBP Link"] = gbp_link["href"]
+
+    # ---- Social Media Links (business's own profiles only -- excludes
+    # B2BCO's own footer/header social icons, which link to B2BCO's own
+    # Facebook/Twitter/LinkedIn/Instagram/Pinterest accounts, not the
+    # listed business's) ----
+    business_section = soup.select_one("div.core-rail") or soup
+    for a in business_section.find_all("a", href=True):
+        href = a["href"]
+        for domain, network in SOCIAL_DOMAINS.items():
+            if _hostname_matches_social_domain(href, domain):
+                business["Social Media Links"][network] = href
+
+    return business
+
+
+# ==========================================================
+# Site parser: find-us-here.com
+# ==========================================================
+# Static HTML, fetched with requests. NOTE: this parser was built from
+# a text/markdown extraction of the live listing page (raw HTML source
+# wasn't available while writing it), so it deliberately avoids relying
+# on exact CSS class names -- every field is located by walking to the
+# next element/line after its own on-page label ("Address", "Phone",
+# "Email", "Web", "Category:") rather than a fixed selector, so it stays
+# robust to markup details that couldn't be directly inspected. Name
+# comes from the page's own <h1>, not <title>/og:title, which are
+# suffixed with ", <City>, <State>, <Country>"; Street/City/State/
+# Zipcode are read by splitting the multi-line block between the
+# "Address" and "Phone" labels (last line -> Zipcode if it's 5 digits,
+# then State, then City, remainder -> Street); Country is the last
+# whitespace-separated token of the "<City>  <State abbr>  <Country>"
+# subheading; Phone/Business Email come from tel:/mailto: links; Website
+# URL is the first external link found after the "Web" label (falling
+# back to the label's own next line of text if no anchor is present, in
+# case the template renders it as plain auto-linked text rather than a
+# real <a>); Category is read from a "Category: <value>" line, and
+# Description from the next sibling block after that line (this
+# template appears to pair a "Category: X" row with a longer business
+# description row immediately after it in the "About <Business>"
+# section); Logo prefers <meta property="og:image"> over any inline
+# listing photo. If any of these turn out to not match the real markup
+# once run against a live fetch, flag the specific field and it can be
+# tightened with a verified CSS selector instead.
+
+_FINDUSHERE_EXCLUDED_LINK_DOMAINS = (
+    "find-us-here.com", "facebook.com", "twitter.com", "x.com",
+    "whatsapp.com", "wa.me", "telegram.me", "t.me", "google.com",
+    "ezoic.net",
+)
+
+
+def parse_findushere(url, html):
+
+    soup = BeautifulSoup(html, "lxml")
+    business = empty_business()
+
+    # ---- Business Name (page h1, not <title>/og:title, which carry a
+    # ", <City>, <State>, <Country>" suffix) ----
+    h1 = soup.find("h1")
+    if h1:
+        business["Business Name"] = clean(h1.get_text())
+
+    page_text = soup.get_text("\n")
+
+    # ---- Address (Street / City / State / Zipcode) ----
+    # The block between the "Address" and "Phone" labels renders as one
+    # line per address component (street, city, state, zip); read from
+    # the end since Zipcode/State/City are the most reliably identified
+    # lines, with whatever remains at the top treated as Street.
+    addr_match = re.search(r"\bAddress\b\s*\n(.*?)\n\s*Phone\b", page_text, re.S)
+    if addr_match:
+        addr_lines = [clean(line) for line in addr_match.group(1).split("\n")]
+        addr_lines = [line for line in addr_lines if line]
+        if addr_lines and re.fullmatch(r"\d{5}(-\d{4})?", addr_lines[-1]):
+            business["Zipcode"] = addr_lines.pop()
+        if addr_lines:
+            business["State"] = addr_lines.pop()
+        if addr_lines:
+            business["City"] = addr_lines.pop()
+        if addr_lines:
+            business["Street"] = " ".join(addr_lines)
+
+    # ---- Country (last token of the "<City>  <State abbr>  <Country>"
+    # subheading right under the business name, e.g. "Nokomis FL USA") ----
+    h2 = soup.find("h2")
+    if h2:
+        tokens = clean(h2.get_text()).split()
+        if tokens:
+            business["Country"] = tokens[-1]
+
+    # ---- Phone (tel: link) ----
+    tel = soup.select_one('a[href^="tel:"]')
+    if tel:
+        phone_text = clean(tel.get_text())
+        business["Phone"] = phone_text or tel["href"].replace("tel:", "").strip()
+
+    # ---- Business Email. Confirmed via DevTools inspection of the live
+    # DOM: rendered as a real <a href="mailto:..."> inside a
+    # <span itemprop="email"> wrapper -- but that <a> is written into
+    # the DOM by an inline <script>, not present in the raw server HTML,
+    # which is why this domain is fetched via Playwright (see
+    # SITE_PARSERS) rather than plain requests. Scoped to itemprop=email
+    # first to avoid accidentally matching an unrelated mailto: link
+    # elsewhere on the page; a bare mailto: scan and the
+    # Cloudflare-obfuscation decoder are kept as fallbacks in case some
+    # listings render this differently. ----
+    email_scope = soup.select_one('[itemprop="email"]') or soup
+    mailto = email_scope.select_one('a[href^="mailto:"]') or soup.select_one('a[href^="mailto:"]')
+    if mailto:
+        business["Business Email"] = mailto["href"].replace("mailto:", "").split("?")[0].strip()
+    if not business["Business Email"]:
+        business["Business Email"] = _find_cf_email(soup)
+
+    # ---- Website URL (first external, non-directory/non-social link
+    # after the "Web" label) ----
+    web_label = soup.find(
+        lambda tag: tag.name in ("h3", "h4", "h5", "strong", "b", "p", "div", "span")
+        and clean(tag.get_text()) == "Web"
+    )
+    if web_label:
+        for link in web_label.find_all_next("a", href=True):
+            href = link["href"]
+            if not href.startswith("http"):
+                continue
+            if _hostname_matches_social_domain(href, "google.com") and "maps" in href.lower():
+                continue
+            if any(_hostname_matches_social_domain(href, d) for d in _FINDUSHERE_EXCLUDED_LINK_DOMAINS):
+                continue
+            business["Website URL"] = href
+            break
+        if not business["Website URL"]:
+            # Some listings render the URL as plain auto-linked text
+            # rather than a real <a> -- fall back to the next non-empty
+            # line of text after the label.
+            web_match = re.search(r"\bWeb\b\s*\n\s*(\S+)", page_text)
+            if web_match:
+                business["Website URL"] = web_match.group(1).strip("<>")
+
+    # ---- Category + Description ("Category: X" line, paired with a
+    # longer description block immediately after it under "About
+    # <Business>"). Playwright renders the full page, including
+    # third-party ad/consent scripts (Ezoic, etc.) whose inline JS can
+    # itself contain the literal substring "Category:" -- so
+    # script/style text nodes are skipped, and any match is sanity-
+    # checked to rule out grabbing minified JS instead of the real
+    # label. ----
+    category_node = None
+    for node in soup.find_all(string=re.compile(r"Category:\s*\S")):
+        if node.find_parent(["script", "style"]):
+            continue
+        candidate = clean(re.sub(r"^.*Category:\s*", "", str(node), flags=re.S))
+        # A real category value is a short, plain label -- minified JS
+        # caught by the same regex reads nothing like one (long, and/or
+        # full of code punctuation), so reject those instead of using
+        # them.
+        if not candidate or len(candidate) > 80 or re.search(r"[{}();=]", candidate):
+            continue
+        category_node = node
+        business["Category"] = candidate
+        break
+
+    if category_node:
+        category_block = category_node.find_parent(["tr", "li", "div", "p"])
+        if category_block:
+            desc_block = category_block.find_next_sibling(["tr", "li", "div", "p"])
+            if desc_block:
+                desc_text = clean(desc_block.get_text())
+                if is_meaningful(desc_text):
+                    business["Description"] = desc_text
+
+    if not business["Description"]:
+        meta_desc = soup.find("meta", property="og:description") or soup.find("meta", attrs={"name": "description"})
+        if meta_desc:
+            desc = clean(meta_desc.get("content", ""))
+            if is_meaningful(desc):
+                business["Description"] = desc
+
+    # ---- Logo (og:image, preferred over any inline listing photo since
+    return business
+
+
+# ==========================================================
+# Site parser: a-zbusinessfinder.com
+# ==========================================================
+# Fetched via Playwright from the start (not plain requests) -- this
+# site is the same underlying directory-network template family as
+# find-us-here.com (identical layout, wording, and even hosts the same
+# WrightWay Emergency Services listing data), and find-us-here.com's
+# Business Email turned out to be written into the DOM by an inline
+# <script> rather than present in the raw server HTML. Confirmed
+# structural differences from find-us-here.com that this parser was
+# built to handle instead of reusing parse_findushere as-is:
+#   - the Address/Phone/Email/Website block renders as a bullet list
+#     ("- Physical Address <multi-line address>", "- Phone ...",
+#     "- Email", "- Website"), with the "Physical Address" label
+#     sharing its very first line with the street address (not on its
+#     own line like find-us-here.com's "Address" heading)
+#   - there is NO "Category: X" line anywhere on the page and NO
+#     <meta property="og:image"> tag at all (confirmed absent from the
+#     fetched <head>) -- Category is instead read from the last crumb
+#     of the breadcrumb trail (the "»"-separated USA / Florida /
+#     Nokomis / Water Damage Restoration path), and Logo comes from the
+#     listing's own photo <img> instead of a meta tag
+# Business Email is still unconfirmed against the real DOM/network for
+# this domain specifically (this parser was built from a text/markdown
+# extraction, the same way find-us-here.com's first draft was, and that
+# one turned out to need a DevTools check) -- if it comes back blank on
+# a live run, inspect the "Email" row the same way and report back what
+# the real element looks like.
+
+def parse_azbusinessfinder(url, html):
+
+    soup = BeautifulSoup(html, "lxml")
+    business = empty_business()
+
+    # ---- Business Name (page h1, not <title>, which carries a
+    # " -  <City>, <State>, <Country> - <Category>" suffix) ----
+    h1 = soup.find("h1")
+    if h1:
+        business["Business Name"] = clean(h1.get_text())
+
+    page_text = soup.get_text("\n")
+
+    # ---- Address (Street / City / State / Zipcode). "Physical Address"
+    # shares its line with the first address line, e.g. "Physical
+    # Address 300 Triple Diamond Blvd", so it's stripped as a prefix
+    # rather than searched for as its own line. ----
+    addr_match = re.search(r"Physical Address\s*(.*?)\n-?\s*Phone\b", page_text, re.S)
+    if addr_match:
+        addr_lines = [clean(line) for line in addr_match.group(1).split("\n")]
+        addr_lines = [line for line in addr_lines if line]
+        if addr_lines and re.fullmatch(r"\d{5}(-\d{4})?", addr_lines[-1]):
+            business["Zipcode"] = addr_lines.pop()
+        if addr_lines:
+            business["State"] = addr_lines.pop()
+        if addr_lines:
+            business["City"] = addr_lines.pop()
+        if addr_lines:
+            business["Street"] = " ".join(addr_lines)
+
+    # ---- Country (last token of the "<City>  <State>  <Country>"
+    # subheading right under the business name) ----
+    h2 = soup.find("h2")
+    if h2:
+        tokens = clean(h2.get_text()).split()
+        if tokens:
+            business["Country"] = tokens[-1]
+
+    # ---- Phone (tel: link) ----
+    tel = soup.select_one('a[href^="tel:"]')
+    if tel:
+        phone_text = clean(tel.get_text())
+        business["Phone"] = phone_text or tel["href"].replace("tel:", "").strip()
+
+    # ---- Business Email. Same platform family as find-us-here.com,
+    # where this turned out to be a real mailto: link scoped to a
+    # <span itemprop="email"> wrapper but only present in the DOM after
+    # an inline <script> runs -- tried here on the same assumption
+    # (hence fetching via Playwright), with a page-wide mailto: scan and
+    # the Cloudflare-obfuscation decoder kept as fallbacks in case this
+    # site's real markup differs. ----
+    email_scope = soup.select_one('[itemprop="email"]') or soup
+    mailto = email_scope.select_one('a[href^="mailto:"]') or soup.select_one('a[href^="mailto:"]')
+    if mailto:
+        business["Business Email"] = mailto["href"].replace("mailto:", "").split("?")[0].strip()
+    if not business["Business Email"]:
+        business["Business Email"] = _find_cf_email(soup)
+
+    # ---- Website URL (first external, non-directory/non-social link
+    # after the "Website" label) ----
+    website_label = soup.find(
+        lambda tag: tag.name in ("h3", "h4", "h5", "strong", "b", "p", "div", "span", "li", "td", "th")
+        and clean(tag.get_text()) == "Website"
+    )
+    if website_label:
+        for link in website_label.find_all_next("a", href=True):
+            href = link["href"]
+            if not href.startswith("http"):
+                continue
+            if "maps" in href.lower() and _hostname_matches_social_domain(href, "google.com"):
+                continue
+            if any(_hostname_matches_social_domain(href, d) for d in _FINDUSHERE_EXCLUDED_LINK_DOMAINS):
+                continue
+            business["Website URL"] = href
+            break
+    if not business["Website URL"]:
+        # Falls back to a plain itemprop="url" anchor (this template marks
+        # the site link with schema.org itemprop="url"), then to a
+        # page-text regex, regardless of whether the "Website" label tag
+        # itself was found above -- the tag-based search above can miss
+        # the label entirely on table-based layouts, and previously that
+        # meant this fallback never ran at all.
+        url_link = soup.select_one('a[itemprop="url"][href^="http"]')
+        if url_link:
+            business["Website URL"] = url_link["href"]
+    if not business["Website URL"]:
+        web_match = re.search(r"\bWebsite\b\s*\n\s*(\S+)", page_text)
+        if web_match:
+            business["Website URL"] = web_match.group(1).strip("<>")
+
+    # ---- Category (last link of the "»"-separated breadcrumb trail --
+    # no "Category:" line exists anywhere on this template) ----
+    breadcrumb = soup.find(lambda tag: tag.name in ("nav", "div", "ul", "ol", "p", "table", "tr", "td") and "»" in tag.get_text())
+    if breadcrumb:
+        crumb_links = breadcrumb.find_all("a")
+        if crumb_links:
+            business["Category"] = clean(crumb_links[-1].get_text())
+
+    # ---- Description ("Business/Community Description" section). If
+    # the label sits inside a <td>/<th>, that's the nearest match for
+    # find_parent() -- but find_next_sibling() from a <td> only reaches
+    # other cells in the *same row*, not the next <tr>, so a matched
+    # td/th is walked up to its row first. ----
+    desc_header = soup.find(string=re.compile(r"Business/Community Description", re.I))
+    if desc_header and not desc_header.find_parent(["script", "style"]):
+        header_block = desc_header.find_parent(["tr", "th", "td", "div", "p"])
+        if header_block and header_block.name in ("td", "th"):
+            header_block = header_block.find_parent("tr") or header_block
+        if header_block:
+            desc_block = header_block.find_next_sibling(["tr", "div", "p"])
+            if desc_block:
+                desc_text = clean(desc_block.get_text())
+                if is_meaningful(desc_text):
+                    business["Description"] = desc_text
+
+    if not business["Description"]:
+        meta_desc = soup.find("meta", property="og:description") or soup.find("meta", attrs={"name": "description"})
+        if meta_desc:
+            desc = clean(meta_desc.get("content", ""))
+            if is_meaningful(desc):
+                business["Description"] = desc
+
+    # ---- Logo (listing's own photo -- confirmed no og:image meta tag
+    # exists on this template) ----
+    logo_img = soup.select_one('img[src*="business_images/main"]') or soup.select_one('img[src*="business_images"]')
+    if logo_img and logo_img.get("src"):
+        business["Logo"] = urljoin(url, logo_img["src"])
+    if not business["Logo"]:
+        og_image = soup.find("meta", property="og:image")
+        if og_image and og_image.get("content"):
+            business["Logo"] = urljoin(url, og_image["content"])
+
+    return business
+
+
+# ==========================================================
+# Site parser: cybo.com
+# ==========================================================
+
+# social_tag query-param values -> Social Media Links network name, as
+# seen on the tested listing's redirect hrefs (?...&social_tag=fb, &tw,
+# &yt, &linkedin, &instagram, &Tiktok). Unrecognized tags fall back to
+# their raw (title-cased) value rather than being dropped, in case a
+# different listing carries a network not seen here.
+CYBO_SOCIAL_TAG_MAP = {
+    "fb": "Facebook",
+    "tw": "Twitter",
+    "yt": "YouTube",
+    "linkedin": "LinkedIn",
+    "instagram": "Instagram",
+    "tiktok": "TikTok",
+}
+
+# Where a social icon's visible text DOES include the real destination
+# (confirmed for TikTok: "Tiktoktiktok.com/@wrightwayes" -- the icon's
+# own CSS class name "Tiktok" runs directly into the domain "tiktok.com"
+# with no separator), the domain root is searched for by name and
+# sliced from there, rather than matched with a generic domain regex --
+# a generic "[a-z0-9-]+\.[a-z]{2,}" pattern greedily swallows the
+# "Tiktok" prefix too (matching "Tiktoktiktok.com" instead of
+# "tiktok.com") since there's no character boundary between the two.
+# Networks not listed here (Facebook/Twitter/YouTube/LinkedIn/Instagram
+# on the tested listing) render as bare icon-name text with no visible
+# URL at all, so they fall back to the tracking-redirect href instead.
+CYBO_NETWORK_DOMAIN_ROOT = {
+    "TikTok": "tiktok.com",
+}
+
+
+def parse_cybo(url, html):
+
+    soup = BeautifulSoup(html, "lxml")
+    business = empty_business()
+    page_text = soup.get_text("\n")
+
+    # ---- Business Name ----
+    h1 = soup.find("h1")
+    if h1:
+        business["Business Name"] = clean(h1.get_text())
+
+    # ---- Street (Google Maps search link built from the street
+    # address -- its visible text is the clean street line; also used
+    # as the source for GBP-Link-is-blank below, since this is a plain
+    # search query, not a real Business Profile link) ----
+    maps_link = soup.select_one('a[href^="https://www.google.com/maps/search/"]')
+    if maps_link:
+        business["Street"] = clean(maps_link.get_text())
+
+    # ---- City / State / Zipcode / Country (labeled "Address" block) ----
+    city_match = re.search(r"\bCity:\s*([^\n]+)", page_text)
+    if city_match:
+        business["City"] = clean(city_match.group(1))
+    state_match = re.search(r"\bState:\s*([^\n]+)", page_text)
+    if state_match:
+        business["State"] = clean(state_match.group(1))
+    zip_match = re.search(r"\bPostal Code:\s*([^\n]+)", page_text)
+    if zip_match:
+        business["Zipcode"] = clean(zip_match.group(1))
+    country_match = re.search(r"\bCountry:\s*([^\n]+)", page_text)
+    if country_match:
+        business["Country"] = clean(country_match.group(1))
+
+    # ---- Zipcode fallback + Street cleanup for listings with no
+    # standalone "Postal Code:" label (confirmed: present on the
+    # WrightWay listing, absent on the Focal listing). When that label
+    # is missing, the Maps-link text used for Street above turns out to
+    # be the FULL "Street, City, State Zip" address rather than just the
+    # street line (again confirmed by comparing the two listings) -- so
+    # the trailing ", <City>, <State> <Zip>?" is stripped off using the
+    # City/State already read above, both cleaning up Street and, if
+    # Zipcode is still blank, recovering it from that trailing Zip.
+    if business["Street"] and business["City"]:
+        tail_pattern = r",?\s*" + re.escape(business["City"])
+        if business["State"]:
+            tail_pattern += r",?\s*" + re.escape(business["State"])
+        tail_pattern += r"\s*(\d{5}(?:-\d{4})?)?\s*$"
+        tail_match = re.search(tail_pattern, business["Street"], re.I)
+        if tail_match:
+            if not business["Zipcode"] and tail_match.group(1):
+                business["Zipcode"] = tail_match.group(1)
+            business["Street"] = clean(business["Street"][:tail_match.start()].rstrip(","))
+
+    # ---- Phone (NOT a tel: link on this template -- it's wrapped in a
+    # "/phone/how-to-call/..." redirect whose visible text is the real,
+    # human-formatted number) ----
+    phone_link = soup.select_one('a[href*="/phone/how-to-call/"]')
+    if phone_link:
+        business["Phone"] = clean(phone_link.get_text())
+
+    # ---- Website URL / Social Media Links (both wrapped in the same
+    # "/r/biz/web?..." click-tracking redirect; distinguished by the
+    # presence/absence of a "social_tag=" query param -- see module
+    # docstring for what is/isn't recoverable for each) ----
+    for a in soup.select('a[href*="/r/biz/web"]'):
+        href = a.get("href", "")
+        tag_match = re.search(r"[?&]social_tag=([^&]+)", href)
+        if not tag_match:
+            if not business["Website URL"]:
+                site_text = clean(a.get_text())
+                business["Website URL"] = site_text if site_text else href
+            continue
+        network = CYBO_SOCIAL_TAG_MAP.get(tag_match.group(1).lower(), tag_match.group(1).title())
+        link_text = clean(a.get_text())
+        value = href
+        domain_root = CYBO_NETWORK_DOMAIN_ROOT.get(network)
+        if domain_root:
+            idx = link_text.lower().find(domain_root)
+            if idx != -1:
+                value = link_text[idx:]
+        business["Social Media Links"][network] = value
+
+    # ---- Description ("About" section) ----
+    about_label = soup.find(string=re.compile(r"^\s*About\s*$"))
+    if about_label:
+        block = about_label.find_parent(["h1", "h2", "h3", "h4", "div", "span"]) or about_label
+        next_block = block.find_next(["p", "div"])
+        if next_block:
+            desc_text = clean(next_block.get_text())
+            if is_meaningful(desc_text):
+                business["Description"] = desc_text
+    if not business["Description"]:
+        # Fallback: the paragraph of running text right after a
+        # standalone "About" line, before the next labeled section.
+        about_match = re.search(
+            r"\nAbout\n+(.+?)\n\n(?:💳|👥|\*\*Categories|Categories:|##|$)",
+            page_text, re.S,
+        )
+        if about_match:
+            desc_text = clean(about_match.group(1))
+            if is_meaningful(desc_text):
+                business["Description"] = desc_text
+    if not business["Description"]:
+        meta_desc = soup.find("meta", property="og:description") or soup.find("meta", attrs={"name": "description"})
+        if meta_desc:
+            desc = clean(meta_desc.get("content", ""))
+            if is_meaningful(desc):
+                business["Description"] = desc
+
+    # ---- Hours (labeled block between "Hours" and "Phone"; the
+    # expanded "Every day..." row is preferred over the collapsed
+    # single-line summary above it, and a space is restored where the
+    # page's own layout runs a label straight into a time, e.g.
+    # "Every day12:00 AM") ----
+    hours_match = re.search(r"\bHours\s*\n(.*?)\nPhone\b", page_text, re.S)
+    if hours_match:
+        hour_lines = [clean(line) for line in hours_match.group(1).split("\n")]
+        hour_lines = [line for line in hour_lines if line and line != "\u25be"]
+        detail_lines = [line for line in hour_lines if "day" in line.lower() or ":" in line]
+        chosen = detail_lines[-1] if detail_lines else (hour_lines[-1] if hour_lines else "")
+        chosen = re.sub(r"(?<=[a-z])(?=\d)", " ", chosen)
+        if is_meaningful(chosen):
+            business["Hours"] = chosen
+
+    # ---- Category (prefers the explicit "Categories: X" label in the
+    # About section over the shorter category tag/pill under the
+    # header, since the labeled one carries the fuller name) ----
+    cat_match = re.search(r"\*?\*?Categories:\*?\*?\s*([^\n.]+)", page_text)
+    if cat_match:
+        business["Category"] = clean(cat_match.group(1))
+    if not business["Category"]:
+        # Fallback: the category pill/tag link under the header, which
+        # (unlike the location breadcrumb links above it) points at a
+        # two-segment /US/<city-state-slug>/<category-slug> path.
+        cat_link = soup.find("a", href=re.compile(r"^/US/[a-z0-9-]+/[a-z0-9-]+/?$"))
+        if cat_link:
+            business["Category"] = clean(cat_link.get_text())
+
+    # ---- GBP Link intentionally left blank -- the only Google-Maps
+    # reference on this template is the plain search-query link used
+    # for Street above, not a real, shareable Business Profile link. ----
+
+    # ---- Logo ----
+    og_image = soup.find("meta", property="og:image")
+    if og_image and og_image.get("content"):
+        business["Logo"] = urljoin(url, og_image["content"])
+
+    return business
+
+
+# ==========================================================
+# Site parser: linkcentre.com
+# ==========================================================
+
+def parse_linkcentre(url, html):
+
+    soup = BeautifulSoup(html, "lxml")
+    business = empty_business()
+
+    # ---- Address / Phone (business:contact_data:* OG meta tags --
+    # same reliable shape as merchantcircle.com; State has no meta
+    # equivalent here either, so it's read from the JSON-LD address
+    # block below instead) ----
+    meta_map = {
+        "business:contact_data:street_address": "Street",
+        "business:contact_data:locality": "City",
+        "business:contact_data:postal_code": "Zipcode",
+        "business:contact_data:country_name": "Country",
+        "business:contact_data:phone_number": "Phone",
+    }
+    for prop, field in meta_map.items():
+        tag = soup.find("meta", property=prop)
+        if tag and tag.get("content"):
+            business[field] = clean(tag["content"])
+
+    # ---- Business Name (og:title carries a " | Restoration Services
+    # Reviews & Info | LinkCentre" suffix -- prefer the profile <h1>) ----
+    h1 = soup.select_one("h1.v2-hero-name")
+    if h1:
+        business["Business Name"] = clean(h1.get_text())
+
+    # ---- JSON-LD LocalBusiness block (@graph-wrapped) -- fills in
+    # State (no meta equivalent), Website URL, Logo, Description, and
+    # backstops Name/Street/City/Zipcode/Phone if the meta tags above
+    # were ever missing on some other listing ----
+    for script in soup.find_all("script", type="application/ld+json"):
+        if not script.string:
+            continue
+        try:
+            data = json.loads(script.string)
+        except Exception:
+            continue
+
+        graph = data.get("@graph") if isinstance(data, dict) else None
+        objects = graph if graph else (data if isinstance(data, list) else [data])
+
+        for obj in objects:
+            if not isinstance(obj, dict) or obj.get("@type") != "LocalBusiness":
+                continue
+
+            if not business["Business Name"]:
+                business["Business Name"] = obj.get("name", "")
+
+            addr = obj.get("address", {}) or {}
+            if not business["Street"]:
+                business["Street"] = addr.get("streetAddress", "")
+            if not business["City"]:
+                business["City"] = addr.get("addressLocality", "")
+            if not business["State"]:
+                business["State"] = addr.get("addressRegion", "")
+            if not business["Zipcode"]:
+                business["Zipcode"] = addr.get("postalCode", "")
+
+            if not business["Phone"]:
+                business["Phone"] = obj.get("telephone", "")
+
+            # sameAs holds the business's own external site (confirmed
+            # ["https://wrightway.com"] on the tested listing) -- takes
+            # the first entry, same idea as zipleaf's site link.
+            same_as = obj.get("sameAs") or []
+            if same_as:
+                business["Website URL"] = same_as[0]
+
+            if obj.get("description"):
+                business["Description"] = clean(obj["description"])
+
+            logo_obj = obj.get("logo") or obj.get("image")
+            if isinstance(logo_obj, dict) and logo_obj.get("url"):
+                business["Logo"] = urljoin(url, logo_obj["url"])
+            elif isinstance(logo_obj, str):
+                business["Logo"] = urljoin(url, logo_obj)
+
+            # knowsAbout doubles as the category list on this template
+            # (confirmed identical to the "Listed In" pill text below).
+            knows_about = obj.get("knowsAbout") or []
+            if knows_about:
+                business["Category"] = ", ".join(knows_about)
+
+    # ---- Website URL fallback (the real, non-tracking anchor in the
+    # "Websites & Listings" card, in case sameAs is ever absent) ----
+    if not business["Website URL"]:
+        listing_url = soup.select_one("a.v2-listing-url[href]")
+        if listing_url:
+            business["Website URL"] = listing_url["href"]
+
+    # ---- Description fallback (meta description) ----
+    if not business["Description"]:
+        meta_desc = soup.find("meta", attrs={"name": "description"})
+        if meta_desc:
+            desc = clean(meta_desc.get("content", ""))
+            if is_meaningful(desc):
+                business["Description"] = desc
+
+    # ---- Category fallback ("Listed In" pills; joined if more than
+    # one, matching the knowsAbout join above) ----
+    if not business["Category"]:
+        cat_links = [clean(a.get_text()) for a in soup.select("div.v2-cat-pills a.v2-cat-pill")]
+        cat_links = [c for c in cat_links if c]
+        if cat_links:
+            business["Category"] = ", ".join(cat_links)
+
+    # ---- Logo fallback (og:image) ----
+    if not business["Logo"]:
+        og_image = soup.find("meta", property="og:image")
+        if og_image and og_image.get("content"):
+            business["Logo"] = urljoin(url, og_image["content"])
+
+    # ---- Social Media Links / Business Email intentionally left
+    # blank -- confirmed on the tested (unclaimed/free-tier) listing
+    # that every social icon and email link on the page belongs to
+    # LinkCentre itself: the "Share" strip posts to LinkCentre's own
+    # Facebook/X/LinkedIn share-intent URLs and a Cloudflare-obfuscated
+    # "share via email" link (both pointing at the profile URL, not a
+    # business account), and the only other email present is
+    # support@linkcentre.com inside the page's Organization JSON-LD
+    # block. No business-owned social profile or email exists anywhere
+    # on this template. ----
+
+    return business
+
+
+# ==========================================================
+# Site parser: band.us (BAND / Naver Band group intro pages)
+# ==========================================================
+
+_BAND_DESCRIPTION_LABELS = [
+    "Owner Name", "Address", "Phone", "Business Email", "About us", "Related Searches",
+]
+
+
+def _band_description_sections(description):
+    """BAND packs the entire business record into a single, newline-
+    separated meta name="description" string (duplicated verbatim in
+    og:description and twitter:description) using fixed labels --
+    "Owner Name:", "Address:", "Phone:", "Business Email:", "About us:",
+    "Related Searches:" -- rather than exposing these as their own meta
+    tags or DOM elements anywhere else on the page (confirmed against
+    the raw page source: none of these values appear a second time
+    outside this one blob). Splits that blob into a {label: value}
+    dict so each field can be read independently instead of re-
+    regexing the whole blob per field. "Owner Name" is included in the
+    label list even though the caller discards it -- it's not part of
+    the common business schema (fields_config.ALL_FIELDS has no such
+    field) -- so this list stays a faithful map of what the template
+    actually contains, not just what we keep, and a label boundary
+    doesn't get missed because it was left out here.
+
+    Label casing is NOT fixed across listings -- confirmed by comparing
+    two real listings: one used "About us:" / "Related Searches:", a
+    different one used "About Us:" (capital U) instead. A case-
+    SENSITIVE match on "About us" silently fails to find that boundary
+    on the second listing, and the regex just keeps scanning for the
+    next label it DOES recognize -- which, since "About Us"/"Related
+    Searches" both went unmatched there, meant the "Business Email:"
+    section swallowed everything after it (About-us blurb and
+    Related-Searches keywords included) all the way to the end of the
+    string, while Description/Keywords silently came back empty. Matches
+    case-insensitively and normalizes the captured label back to its
+    canonical form from _BAND_DESCRIPTION_LABELS so section lookups
+    elsewhere (sections.get("About us"), etc.) keep working regardless
+    of which casing this particular listing happened to use."""
+    if not description:
+        return {}
+
+    canonical_by_lower = {label.lower(): label for label in _BAND_DESCRIPTION_LABELS}
+    label_pattern = "|".join(re.escape(l) for l in _BAND_DESCRIPTION_LABELS)
+    matches = list(re.finditer(rf"(?:^|\n)({label_pattern}):\n?", description, flags=re.I))
+
+    sections = {}
+    for i, m in enumerate(matches):
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(description)
+        canonical_label = canonical_by_lower[m.group(1).lower()]
+        sections[canonical_label] = clean(description[start:end])
+    return sections
+
+
+def parse_band(url, html):
+
+    soup = BeautifulSoup(html, "lxml")
+    business = empty_business()
+
+    # ---- Bot-wall guard ----
+    if _looks_blocked(html):
+        return business
+
+    # ---- Business Name -- the raw <title>/og:title is "X | BAND", so
+    # the fixed " | BAND" suffix is stripped off rather than kept as
+    # part of the name ----
+    og_title = soup.find("meta", property="og:title")
+    title_text = og_title["content"] if og_title and og_title.get("content") else None
+    if not title_text:
+        title_tag = soup.find("title")
+        title_text = title_tag.get_text() if title_tag else ""
+    business["Business Name"] = clean(re.sub(r"\s*\|\s*BAND\s*$", "", title_text or "", flags=re.I))
+
+    # ---- Everything else lives inside the description blob (see
+    # _band_description_sections) -- og:description/twitter:description
+    # repeat the same text verbatim, so meta name="description" is read
+    # first as the primary source with og:description as a fallback if
+    # it's ever missing ----
+    desc_tag = soup.find("meta", attrs={"name": "description"})
+    description = desc_tag["content"] if desc_tag and desc_tag.get("content") else None
+    if not description:
+        og_desc = soup.find("meta", property="og:description")
+        description = og_desc["content"] if og_desc and og_desc.get("content") else ""
+
+    sections = _band_description_sections(description)
+
+    # ---- Address -- reuses blinx's comma-split + trailing "STATE ZIP"
+    # regex helper, since BAND renders addresses in the same loose
+    # "Street, City ,ST Zip" shape (stray space before the second comma
+    # -- confirmed on the tested listing: "300 Triple Diamond Blvd,
+    # Nokomis ,FL 34275") that _split_blinx_address already handles
+    # correctly ----
+    address = sections.get("Address", "")
+    if address:
+        street, city, state, zipcode = _split_blinx_address(address)
+        business["Street"] = street
+        business["City"] = city
+        business["State"] = state
+        business["Zipcode"] = zipcode
+
+    # ---- Phone ----
+    if sections.get("Phone"):
+        business["Phone"] = sections["Phone"]
+
+    # ---- Business Email ----
+    if sections.get("Business Email"):
+        business["Business Email"] = sections["Business Email"]
+
+    # ---- Description ("About us:" section) ----
+    if sections.get("About us"):
+        business["Description"] = sections["About us"]
+
+    # ---- Keywords ("Related Searches:" is a comma-separated list of
+    # search terms -- the closest thing this template has to a
+    # Keywords field) ----
+    if sections.get("Related Searches"):
+        business["Keywords"] = sections["Related Searches"]
+
+    # ---- No genuine Country, Website URL, Hours, Social Media Links,
+    # GBP Link, Category, or Photos exist anywhere on this template.
+    # og:image is present but is the group's own cover photo, not a
+    # business logo, so it's deliberately left out of "Logo" too
+    # rather than guessing. ----
+
+    return business
+
+
+# ==========================================================
+# Site parser: americansearch.info
+# ==========================================================
+
+def parse_americansearch(url, html):
+    """Brilliant-Directories-style template (same underlying platform
+    family as chamberofcommerce.com/trueen.com, confirmed by the
+    formValidation/Froala/select2 boilerplate shared across all three).
+    Unlike those, this template has no LocalBusiness JSON-LD block at
+    all -- every field is read from plain schema.org microdata
+    attributes and verified CSS selectors in the profile body."""
+
+    soup = BeautifulSoup(html, "lxml")
+    business = empty_business()
+
+    # ---- Bot-wall guard ----
+    if _looks_blocked(html):
+        return business
+
+    # ---- Business Name -- prefer the profile <h1> over og:title, since
+    # og:title on this template is "X on AMERICAN SEARCH" (site-branded),
+    # not the bare business name ----
+    h1 = soup.select_one("div.header-member-name h1.bold")
+    if h1:
+        business["Business Name"] = clean(h1.get_text())
+    if not business["Business Name"]:
+        og_title = soup.find("meta", property="og:title")
+        if og_title and og_title.get("content"):
+            business["Business Name"] = clean(re.sub(r"\s+on\s+AMERICAN SEARCH\s*$", "", og_title["content"], flags=re.I))
+
+    # ---- Address -- schema.org streetAddress microdata renders as a
+    # single "Street, City, ST Zip" string; reuses blinx's comma-split +
+    # trailing "STATE ZIP" regex helper, which handles this shape too ----
+    addr_tag = soup.select_one('[itemprop="streetAddress"]')
+    if addr_tag:
+        street, city, state, zipcode = _split_blinx_address(clean(addr_tag.get_text()))
+        business["Street"] = street
+        business["City"] = city
+        business["State"] = state
+        business["Zipcode"] = zipcode
+
+    # ---- Country -- not present as its own labeled field anywhere on
+    # the page; this template's breadcrumb is always Home > {Country} >
+    # {Category} > {business name}, so the second crumb's itemprop="name"
+    # span is read as Country rather than leaving it blank ----
+    crumbs = [clean(s.get_text()) for s in soup.select('ol.breadcrumb span[itemprop="name"]')]
+    if len(crumbs) >= 3:
+        business["Country"] = crumbs[1]
+
+    # ---- Category (breadcrumb's third crumb, same list as above --
+    # kept as a separate read so a missing/short breadcrumb doesn't
+    # silently borrow the wrong crumb for either field) ----
+    if len(crumbs) >= 3:
+        business["Category"] = crumbs[2]
+    if not business["Category"]:
+        cat_tag = soup.select_one("span.profile-header-top-category")
+        if cat_tag:
+            business["Category"] = clean(cat_tag.get_text())
+
+    # ---- Phone (schema.org telephone microdata -- the header's
+    # "See Phone Number" reveal button/span is NOT itemprop-tagged and
+    # duplicates the same number, so this is the only occurrence that
+    # needs reading) ----
+    phone_tag = soup.select_one('[itemprop="telephone"]')
+    if phone_tag:
+        business["Phone"] = clean(phone_tag.get_text())
+
+    # ---- Website URL ----
+    site_link = soup.select_one('a.weblink[itemprop="url"]')
+    if site_link and site_link.get("href"):
+        business["Website URL"] = clean(site_link["href"])
+
+    # ---- Description ("About my Business" free-text block) ----
+    about_tag = soup.select_one("span.textarea.textarea-about_me")
+    if about_tag:
+        business["Description"] = clean(about_tag.get_text())
+
+    # ---- Logo (profile photo shown next to the business name; resolved
+    # to an absolute URL since the src is site-relative) ----
+    logo_tag = soup.select_one("div.profile-image img.img-rounded")
+    if logo_tag and logo_tag.get("src"):
+        business["Logo"] = urljoin(url, logo_tag["src"])
+
+    # ---- No genuine Hours section exists on the tested (unclaimed)
+    # listing's Overview tab. No genuine Social Media Links or GBP Link
+    # exist either -- the page's only Facebook/LinkedIn/X icons are the
+    # "Share This Page" buttons, which post the AMERICAN SEARCH listing
+    # URL to those networks' share-intent endpoints and belong to the
+    # directory, not the business; the only Maps references are a
+    # directions search-query link and an Embed API iframe URL carrying
+    # the page's own API key, same pattern as chamberofcommerce.com. ----
+
+    return business
+
+
+# ==========================================================
 # Field filtering (fields_config.py-driven)
 # ==========================================================
 
@@ -4001,6 +5663,29 @@ SITE_PARSERS = {
     "merchantcircle.com": ("requests", parse_merchantcircle),
     "globalbusinessdirectory.us": ("requests", parse_globalbusinessdirectory),
     "chamberofcommerce.com": ("requests", parse_chamberofcommerce),
+    "trueen.com": ("requests", parse_trueen),
+    "citysquares.com": ("requests", parse_citysquares),
+    "b2bco.com": ("requests", parse_b2bco),
+    # The Business Email link is inserted into the DOM by an inline
+    # <script> rather than being present in the raw server-rendered
+    # HTML (confirmed via DevTools: a plain requests.get() never sees
+    # the resulting <a href="mailto:..."> at all), so this needs
+    # Playwright to let that script run before we read the page.
+    "find-us-here.com": ("playwright", parse_findushere),
+    # Same platform family as find-us-here.com; fetched via Playwright
+    # up front rather than discovering the same JS-injected-email issue
+    # a second time -- see parse_azbusinessfinder for details.
+    "a-zbusinessfinder.com": ("playwright", parse_azbusinessfinder),
+    "cybo.com": ("requests", parse_cybo),
+    "linkcentre.com": ("requests", parse_linkcentre),
+    # All the fields BAND exposes for a group's business record (name,
+    # address, phone, email, about-us blurb, related-search keywords)
+    # are already baked into the server-rendered <meta name="description">
+    # (and its og:/twitter: duplicates) in the raw HTML, so no
+    # JS-rendering wait is needed even though the rest of the page is a
+    # client-hydrated app shell -- see parse_band for details.
+    "band.us": ("requests", parse_band),
+    "americansearch.info": ("requests", parse_americansearch),
 }
 
 
@@ -4077,6 +5762,9 @@ if __name__ == "__main__":
         "https://askmap.net/location/7831489/united-states/haqq-legal-ai",
         "https://www.zipleaf.us/Companies/Focal",
         "https://www.chamberofcommerce.com/business-directory/washington/spokane-valley/home-health-care-service/2023027461-loving-neighbor-home-care-llc",
+        "https://trueen.com/business/listing/focal-newark/752375",
+        "https://www.cybo.com/US-biz/wrightway-emergency-services_30",
+        "https://www.linkcentre.com/profile/joshuareyno45/",
 
     ]
 
