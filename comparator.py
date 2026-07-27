@@ -82,6 +82,19 @@ def normalize_name(value: str) -> str:
     return re.sub(r"\s+", " ", v).strip()
 
 
+def normalize_owner_name(value: str) -> str:
+    """
+    Lowercase, ASCII-fold, strip punctuation, and extra spaces.
+    Unlike normalize_name(), this deliberately does NOT strip legal-entity
+    suffixes (llc/inc/co/corp/...) — those are business-name artifacts and
+    have no business being stripped out of a person's name (a surname like
+    "Company" or "Cook" should never lose letters to _LEGAL_SUFFIXES).
+    """
+    v = _to_ascii(value).lower().strip()
+    v = re.sub(r"[&'\"`,\.;\-–—]", " ", v)
+    return re.sub(r"\s+", " ", v).strip()
+
+
 def normalize_state(value: str) -> str:
     """
     Always resolve to the full lowercase state name so that abbreviations
@@ -163,10 +176,12 @@ def normalize(value: str, field: str = "") -> str:
     fl = field.lower()
     if "phone" in fl:
         return normalize_phone(value)
-    if "url" in fl or "website" in fl:
+    if "url" in fl or "website" in fl or "gbp link" in fl:
         return normalize_url(value)
     if fl == "name":
         return normalize_name(value)
+    if fl == "owner name":
+        return normalize_owner_name(value)
     if fl == "country":
         return normalize_country(value)
     if fl == "state":
@@ -237,6 +252,38 @@ def _match_name(u: str, e: str) -> bool:
     te = set(e.split())
     if not tu or not te:
         return False
+    shorter, longer = (tu, te) if len(tu) <= len(te) else (te, tu)
+    if shorter <= longer:
+        if len(shorter) >= 2:
+            return True
+        token = next(iter(shorter))
+        return len(token) >= 5
+    return False
+
+
+def _match_owner_name(u: str, e: str) -> bool:
+    """
+    Owner/contact names match if:
+      - Exact after normalization, OR
+      - Same set of tokens regardless of order (site templates render
+        "First Last" while a user might type "Last, First" or vice versa —
+        person names don't have a canonical word order the way street
+        addresses do), OR
+      - Every token in the shorter name appears in the longer name
+        (catches a user typing just a first or last name).
+    Mirrors _match_name()'s conservative single-token rule (require len>=5)
+    so a short common token like "lee" doesn't match unrelated people.
+    """
+    if not u or not e:
+        return False
+    if u == e:
+        return True
+    tu = set(u.split())
+    te = set(e.split())
+    if not tu or not te:
+        return False
+    if tu == te:
+        return True
     shorter, longer = (tu, te) if len(tu) <= len(te) else (te, tu)
     if shorter <= longer:
         if len(shorter) >= 2:
@@ -384,11 +431,21 @@ def values_match(user_val: str, extracted_val: str, field: str) -> bool:
     if "phone" in fl:
         return _match_phone(u, e)
 
+    if "gbp link" in fl:
+        # Exact match on the full normalized URL (protocol/www/trailing-slash
+        # stripped) — unlike the general Website URL field, domain-only
+        # matching is wrong here since every GBP link shares the same
+        # google.com/maps domain; the listing-specific path is the whole point.
+        return u == e
+
     if "url" in fl or "website" in fl:
         return _match_url(u, e)
 
     if fl == "name":
         return _match_name(u, e)
+
+    if fl == "owner name":
+        return _match_owner_name(u, e)
 
     if fl in ("street", "city", "zipcode", "country"):
         return _match_address_field(u, e)
@@ -463,42 +520,41 @@ def compare_row(
                 has_error = True
             continue
 
-        # Hours → presence check only, independent of user_val. Being
-        # tracked for this source was already confirmed above (the
-        # source_fields check at the top of the loop); the only remaining
-        # question is whether extraction actually found hours on the page.
+        # Hours, GBP Link, Social Media Links: if the user typed an expected
+        # value, compare it against what was extracted (CORRECT/INCORRECT),
+        # same as any other field. If the user left it blank, fall back to
+        # a presence-only check — most sources don't collect a ground-truth
+        # value for these, so user_val is blank far more often than not,
+        # and the only meaningful question then is whether extraction found
+        # *anything* on the page.
         #
-        # This must run BEFORE the "user left this field blank" check below.
-        # Most sources don't even collect an Hours value from the user, so
-        # user_val is blank far more often than not — if that check ran
-        # first it would always short-circuit Hours to N/A, and a page that
-        # genuinely has no hours listed (e.g. freelistingusa.com) would
-        # never get flagged as MISSING even though Hours is applicable
-        # there per fields_config.SOURCE_FIELDS.
-        # Presence-only fields: Hours, GBP Link, Social Media Links.
-        # Same reasoning for all three — most sources don't collect an
-        # "expected" value from the user for these (there's rarely a
-        # ground-truth Hours string, GBP Link, or Social Media Links to
-        # type in and compare against), so user_val is blank far more
-        # often than not. If the "user left this field blank" check below
-        # ran first it would always short-circuit these fields to N/A,
-        # even on a source where the field is genuinely tracked per
-        # fields_config.SOURCE_FIELDS and the only real question is
-        # whether extraction found *anything* on the page.
+        # This must run BEFORE the generic "user left this field blank"
+        # check below, since that check would otherwise short-circuit a
+        # blank user_val straight to N/A — even on a source where the field
+        # is genuinely tracked per fields_config.SOURCE_FIELDS and the page
+        # genuinely has nothing there (e.g. freelistingusa.com has no
+        # Hours), which should be flagged MISSING rather than skipped.
         #
         # Social Media Links' extracted_val is a dict (network -> url),
         # e.g. {} or {"Facebook": "..."}, not a string — `not extracted_val`
         # correctly treats None, "", and {} all as empty without needing a
         # separate str()-based check for that field.
         if field in ("Hours", "GBP Link", "Social Media Links"):
-            if not extracted_val or (
+            extracted_blank = not extracted_val or (
                 isinstance(extracted_val, str)
                 and extracted_val.strip() in ("", "null", "None")
-            ):
+            )
+            if extracted_blank:
                 row_result[field] = "MISSING"
                 has_error = True
-            else:
+            elif not user_val:
+                # No expected value typed in — presence-only fallback.
                 row_result[field] = "CORRECT"
+            elif values_match(user_val, str(extracted_val), field):
+                row_result[field] = "CORRECT"
+            else:
+                row_result[field] = "INCORRECT"
+                has_error = True
             continue
 
         # User left this field blank → skip
