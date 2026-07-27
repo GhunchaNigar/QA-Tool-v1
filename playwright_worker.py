@@ -3,7 +3,7 @@ playwright_worker.py
 Standalone script called by scraper.py via subprocess to avoid
 Windows asyncio/Streamlit event loop conflicts.
 
-Usage: python playwright_worker.py <url> <timeout_ms>
+Usage: python playwright_worker.py <url> <timeout_ms> [<ignore_https_errors>]
 Output: JSON to stdout  {"success": bool, "html": "...", "text": "...", "title": "...", "debug": "..."}
 """
 
@@ -32,6 +32,26 @@ BLOCK_SIGNALS = [
     "ddos-guard", "checking your browser", "verify you are human",
     "enable cookies to continue", "please enable cookies",
     "security check", "access to this page has been denied",
+]
+
+# ── Rate-limit signals ───────────────────────────────────────────────
+# Distinct from BLOCK_SIGNALS above: a CAPTCHA/bot-wall is a dead end
+# that waiting out won't fix, but a 429 is explicitly telling us to
+# slow down and come back later -- retrying immediately just draws
+# another 429. Confirmed on closelocation.com: both the fast and
+# patient attempts returned the exact same 81-char body ("Too Many
+# Requests The user has sent too many requests in a given amount of
+# time.") and got misdiagnosed as generic "too thin" content, which
+# reads like a broken/empty listing rather than what it actually is --
+# the site rate-limiting this IP. Checking the navigation response's
+# HTTP status (most reliable) plus this text as a fallback (in case a
+# proxy/CDN returns 200 with a rate-limit message in the body) lets
+# scrape() apply an actual backoff instead of repeating the same
+# doomed request twice in a row.
+RATE_LIMIT_SIGNALS = [
+    "too many requests",
+    "rate limit exceeded",
+    "429 too many requests",
 ]
 
 # ── Stealth init script ──────────────────────────────────────────────
@@ -98,6 +118,17 @@ _DATA_READY_SELECTOR = (
 def _is_blocked(html, text):
     combined = (html[:3000] + text[:1000]).lower()
     return any(s in combined for s in BLOCK_SIGNALS)
+
+
+def _is_rate_limited(html, text, status=None):
+    """True if the response is an HTTP 429, or the body reads like one
+    even under a 200 (some CDNs/WAFs return rate-limit pages without
+    setting the status code). Status check first since it's the most
+    reliable signal when available."""
+    if status == 429:
+        return True
+    combined = (html[:2000] + text[:500]).lower()
+    return any(s in combined for s in RATE_LIMIT_SIGNALS)
 
 
 # A page's <title>/og:title being literally its own bare domain (e.g.
@@ -298,15 +329,23 @@ async def _attempt(context, url, timeout, patient):
     domcontentloaded), the retry pass gives the page more room to
     settle (domcontentloaded first, then an explicit data-ready wait)
     since a page that was too slow/thin on attempt 1 may just need
-    more time rather than a different approach entirely."""
+    more time rather than a different approach entirely.
+
+    Returns (html, text, title, error, status, retry_after) -- status
+    is the navigation response's HTTP status code (None if navigation
+    itself raised), and retry_after is the parsed Retry-After response
+    header in seconds when the server sent one (None otherwise), so a
+    429 can be backed off for exactly as long as the server asked
+    instead of a guessed delay."""
 
     page = await context.new_page()
     try:
+        response = None
         if not patient:
             try:
-                await page.goto(url, timeout=timeout, wait_until="networkidle")
+                response = await page.goto(url, timeout=timeout, wait_until="networkidle")
             except Exception:
-                await page.goto(url, timeout=timeout, wait_until="domcontentloaded")
+                response = await page.goto(url, timeout=timeout, wait_until="domcontentloaded")
             # Give client-side-hydrated content (e.g. blinx.biz's
             # business record, loaded via a post-load XHR) a chance to
             # land before the fast pass extracts. This is a real signal
@@ -319,7 +358,7 @@ async def _attempt(context, url, timeout, patient):
             # like analytics/ads that never let networkidle fire), then
             # wait explicitly for the data-bearing selector with a much
             # longer budget before falling back to extraction regardless.
-            await page.goto(url, timeout=timeout, wait_until="domcontentloaded")
+            response = await page.goto(url, timeout=timeout, wait_until="domcontentloaded")
             data_arrived = await _wait_for_data(page, min(timeout, 20000))
             if not data_arrived:
                 # Selector never showed up within budget -- give the
@@ -328,9 +367,20 @@ async def _attempt(context, url, timeout, patient):
                 await page.wait_for_timeout(3000)
 
         html, text, title = await _extract_and_expand(page)
-        return html, text, title, None
+
+        status = response.status if response else None
+        retry_after = None
+        if response is not None:
+            try:
+                header_val = response.headers.get("retry-after")
+                if header_val is not None:
+                    retry_after = float(header_val)
+            except (TypeError, ValueError):
+                retry_after = None
+
+        return html, text, title, None, status, retry_after
     except Exception as e:
-        return "", "", "", f"goto/extract failed: {e}"
+        return "", "", "", f"goto/extract failed: {e}", None, None
     finally:
         await page.close()
 
@@ -346,7 +396,19 @@ def _preview(text, n=300):
     return flat
 
 
-async def scrape(url, timeout):
+# ── Rate-limit backoff schedule ──────────────────────────────────────
+# Used only as a fallback when the server didn't send a Retry-After
+# header. Two short waits rather than one -- a burst-limited endpoint
+# (like closelocation.com, seen returning 429 on both the fast AND
+# patient attempts back-to-back with zero delay between them) often
+# clears within single-digit seconds, but padding a second, longer
+# wait in after that covers a slower-draining limiter without making
+# every normal, non-rate-limited page pay for it.
+_RATE_LIMIT_BACKOFFS = [5.0, 12.0]
+_RATE_LIMIT_MAX_WAIT = 20.0  # cap even if Retry-After asks for longer
+
+
+async def scrape(url, timeout, ignore_https_errors=False):
     from playwright.async_api import async_playwright
     result = {"success": False, "html": "", "text": "", "title": "", "debug": ""}
 
@@ -373,84 +435,117 @@ async def scrape(url, timeout):
                 viewport={"width": 1280, "height": 900},
                 locale="en-US",
                 extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+                # Some sources (confirmed: bestdealfinder.com) serve a
+                # broken/self-signed/mismatched TLS certificate on HTTPS,
+                # which Chromium rejects outright as
+                # net::ERR_CERT_AUTHORITY_INVALID before any navigation
+                # can happen at all -- goto() fails immediately, on both
+                # the fast and patient attempts, with no page content to
+                # even evaluate "thin" against. This is passed in per-call
+                # (see __main__ below) rather than defaulted True, so it
+                # only relaxes verification for the specific domains the
+                # caller (extractor.py's IGNORE_CERT_ERRORS_DOMAINS) has
+                # already confirmed have this problem, not for every site.
+                ignore_https_errors=ignore_https_errors,
             )
             await context.add_init_script(_STEALTH_INIT_SCRIPT)
 
             debug_notes = []
             html, text, title = "", "", ""
 
-            # ---- Attempt 1 (fast path) ----
-            html, text, title, err = await _attempt(context, url, timeout, patient=False)
-            if err:
-                debug_notes.append(f"attempt1: {err}")
-            elif _is_blocked(html, text):
-                debug_notes.append("attempt1: blocked/CAPTCHA")
-            elif _is_bare_domain_title(title, own_domain):
-                debug_notes.append(f"attempt1: bare-domain title stub ({title!r})")
-            elif _is_thin(text, html, own_domain=own_domain):
-                debug_notes.append(
-                    f"attempt1: too thin ({len(text.strip())} chars) | preview: {_preview(text)!r}"
-                )
-            else:
-                debug_notes.append(f"attempt1 OK | text={len(text):,} chars")
+            # ── Attempt loop ────────────────────────────────────────
+            # Up to: 1 fast attempt + 1 patient attempt, same as
+            # before -- PLUS up to len(_RATE_LIMIT_BACKOFFS) extra
+            # patient retries, but ONLY when the previous attempt was
+            # specifically rate-limited (429), each preceded by an
+            # actual sleep. A CAPTCHA/bot-wall or a genuinely thin page
+            # still exits after the normal 2 attempts exactly as
+            # before -- only the 429 case gets the extra, delayed
+            # retries, since that's the one case where waiting is
+            # actually expected to help.
+            attempt_num = 0
+            rate_limit_retries = 0
+            ok = False
 
-            attempt1_ok = (
-                not err and not _is_blocked(html, text)
-                and not _is_bare_domain_title(title, own_domain)
-                and not _is_thin(text, html, own_domain=own_domain)
-            )
-
-            # ---- Attempt 2 (patient retry) ----
-            # Only retried when attempt 1 didn't cleanly succeed -- this
-            # is what fixes the "works sometimes, fails other times"
-            # pattern: a single slow/early snapshot no longer means the
-            # whole extraction fails outright.
-            if not attempt1_ok:
-                html2, text2, title2, err2 = await _attempt(
-                    context, url, timeout, patient=True
+            while True:
+                attempt_num += 1
+                patient = attempt_num > 1
+                html, text, title, err, status, retry_after = await _attempt(
+                    context, url, timeout, patient=patient
                 )
-                if err2:
-                    debug_notes.append(f"attempt2: {err2}")
-                elif _is_blocked(html2, text2):
-                    debug_notes.append("attempt2: blocked/CAPTCHA")
-                elif _is_bare_domain_title(title2, own_domain):
-                    debug_notes.append(f"attempt2: bare-domain title stub ({title2!r})")
-                elif _is_thin(text2, html2, own_domain=own_domain):
+
+                rate_limited = (not err) and _is_rate_limited(html, text, status)
+                blocked = (not err) and not rate_limited and _is_blocked(html, text)
+                bare_title = (not err) and not rate_limited and _is_bare_domain_title(title, own_domain)
+                thin = (
+                    not err and not rate_limited and not blocked and not bare_title
+                    and _is_thin(text, html, own_domain=own_domain)
+                )
+                ok = not err and not rate_limited and not blocked and not bare_title and not thin
+
+                label = f"attempt{attempt_num}"
+                if err:
+                    debug_notes.append(f"{label}: {err}")
+                elif rate_limited:
                     debug_notes.append(
-                        f"attempt2: too thin ({len(text2.strip())} chars) | preview: {_preview(text2)!r}"
+                        f"{label}: rate limited (HTTP {status if status else '??'}) "
+                        f"| preview: {_preview(text)!r}"
+                    )
+                elif blocked:
+                    debug_notes.append(f"{label}: blocked/CAPTCHA")
+                elif bare_title:
+                    debug_notes.append(f"{label}: bare-domain title stub ({title!r})")
+                elif thin:
+                    debug_notes.append(
+                        f"{label}: too thin ({len(text.strip())} chars) | preview: {_preview(text)!r}"
                     )
                 else:
-                    debug_notes.append(f"attempt2 OK | text={len(text2):,} chars")
+                    debug_notes.append(f"{label} OK | text={len(text):,} chars")
 
-                # Prefer attempt 2's result if it's usable, even if
-                # attempt 1 produced *some* non-empty output -- a thin
-                # or blocked attempt 1 result is not a valid fallback.
-                if (
-                    not err2 and not _is_blocked(html2, text2)
-                    and not _is_bare_domain_title(title2, own_domain)
-                    and not _is_thin(text2, html2, own_domain=own_domain)
-                ):
-                    html, text, title = html2, text2, title2
+                if ok:
+                    break
+
+                if rate_limited and rate_limit_retries < len(_RATE_LIMIT_BACKOFFS):
+                    wait_s = retry_after if retry_after else _RATE_LIMIT_BACKOFFS[rate_limit_retries]
+                    wait_s = min(wait_s, _RATE_LIMIT_MAX_WAIT)
+                    debug_notes.append(f"waiting {wait_s:.0f}s before retry (rate limited)")
+                    await asyncio.sleep(wait_s)
+                    rate_limit_retries += 1
+                    continue
+
+                # Non-rate-limit failure: retry once (the original
+                # fast -> patient fallback), then give up.
+                if attempt_num < 2:
+                    continue
+
+                break
 
             await browser.close()
 
-            final_blocked = _is_blocked(html, text)
-            final_bare_title = _is_bare_domain_title(title, own_domain)
-            final_thin = _is_thin(text, html, own_domain=own_domain)
-
-            if final_blocked:
-                result["debug"] = "Playwright: blocked/CAPTCHA | " + " | ".join(debug_notes)
-                return result
-            if final_bare_title:
-                result["debug"] = (
-                    f"Playwright: bare-domain title stub ({title!r}) | " + " | ".join(debug_notes)
-                )
-                return result
-            if final_thin:
-                result["debug"] = (
-                    f"Playwright: too thin ({len(text.strip())} chars) | "
-                    + " | ".join(debug_notes)
-                )
+            if not ok:
+                final_status = None
+                # Re-derive the terminal failure reason from the last
+                # debug note for the top-level message.
+                last_note = debug_notes[-1] if debug_notes else ""
+                if "rate limited" in last_note:
+                    result["debug"] = (
+                        "Playwright: rate limited (429), retries exhausted | "
+                        + " | ".join(debug_notes)
+                    )
+                elif "blocked/CAPTCHA" in last_note:
+                    result["debug"] = "Playwright: blocked/CAPTCHA | " + " | ".join(debug_notes)
+                elif "bare-domain title stub" in last_note:
+                    result["debug"] = (
+                        f"Playwright: bare-domain title stub ({title!r}) | "
+                        + " | ".join(debug_notes)
+                    )
+                elif "too thin" in last_note:
+                    result["debug"] = (
+                        f"Playwright: too thin ({len(text.strip())} chars) | "
+                        + " | ".join(debug_notes)
+                    )
+                else:
+                    result["debug"] = "Playwright: failed | " + " | ".join(debug_notes)
                 return result
 
             result.update({
@@ -493,10 +588,21 @@ if __name__ == "__main__":
     _make_stdout_utf8_safe()
     url     = sys.argv[1] if len(sys.argv) > 1 else ""
     timeout = int(sys.argv[2]) if len(sys.argv) > 2 else 45000
+    # Optional 3rd CLI arg from extractor.py's fetch_via_playwright(): "1"
+    # to relax TLS certificate validation for a known-bad-cert domain
+    # (see IGNORE_CERT_ERRORS_DOMAINS there), "0"/absent otherwise. Kept
+    # opt-in rather than a bare bool(int(...)) crash risk if the caller
+    # is ever an older extractor.py build that doesn't pass this arg yet.
+    ignore_https_errors = False
+    if len(sys.argv) > 3:
+        try:
+            ignore_https_errors = bool(int(sys.argv[3]))
+        except ValueError:
+            ignore_https_errors = False
     loop    = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        result = loop.run_until_complete(scrape(url, timeout))
+        result = loop.run_until_complete(scrape(url, timeout, ignore_https_errors))
     except Exception as e:
         result = {"success": False, "html": "", "text": "", "title": "",
                   "debug": f"worker top-level error: {e}"}
