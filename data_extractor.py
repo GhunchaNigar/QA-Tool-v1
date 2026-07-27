@@ -7,9 +7,9 @@ extractor.py's `extract_business(url)` returns a dict shaped like
 empty_business() in that file, e.g.:
 
     {
-        "Business Name": "...", "Street": "...", ..., "Country": "...",
-        "Phone": "...", "Website URL": "...", "Keywords": "...",
-        "Description": "...", "Hours": "...",
+        "Business Name": "...", "Owner Name": "...", "Street": "...", ...,
+        "Country": "...", "Phone": "...", "Website URL": "...",
+        "Keywords": "...", "Description": "...", "Hours": "...",
         "Social Media Links": {"Facebook": "https://...", ...},
         "GBP Link": "...", "Business Email": "...", "Category": "...",
         "Logo": "https://.../logo.png",   # URL string, or "" if none
@@ -50,6 +50,7 @@ def _normalize_extracted(raw: dict, url: str = "") -> dict:
 
     out = {}
     out["Name"] = raw.get("Business Name", "") or ""
+    out["Owner Name"] = raw.get("Owner Name", "") or ""
 
     for field in (
         "Street", "City", "State", "Zipcode", "Country", "Phone",
