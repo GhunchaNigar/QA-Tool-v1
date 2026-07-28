@@ -208,198 +208,178 @@ def fetch_via_playwright(url, worker_path="playwright_worker.py", timeout_ms=450
 
 
 # ==========================================================
-# Site parser: nearfinderus.com
+# Site parser: bpublic.com
 # ==========================================================
 
-def _extract_nearfinder_redirect_url(href):
-    if "/empresa/redirect" not in href.lower():
-        return None
-    target = parse_qs(urlparse(href).query).get("url")
-    return target[0] if target else None
+def _bpublic_field(soup, field_name):
+    """Text of the value span/cell inside a div.table-display-<field_name>
+    row, or "" if that row isn't present on this listing."""
+    el = soup.select_one(f".table-display-{field_name} .col-sm-8 span") \
+        or soup.select_one(f".table-display-{field_name} .col-sm-8")
+    return clean(el.get_text()) if el else ""
 
 
-def parse_nearfinderus(url, html):
+def _bpublic_clean_value(text):
+    text = clean(text)
+    if not text or text.upper() == "N/A":
+        return ""
+    return text
+
+
+def _parse_bpublic_about_block(business, about_el, url):
+    """Some bPUBLIC listings (e.g. "Focal") don't fill in the structured
+    address/phone/website rows at all -- instead everything is packed as
+    "Label:" / value paragraph pairs inside the free-text "About" box.
+    Pull Address/Phone/Website out of that pattern and treat any
+    remaining paragraphs as the Description."""
+    paragraphs = about_el.find_all("p")
+    desc_parts = []
+    i = 0
+    while i < len(paragraphs):
+        label = clean(paragraphs[i].get_text())
+
+        if label == "Address:" and i + 1 < len(paragraphs):
+            address_text = _bpublic_clean_value(paragraphs[i + 1].get_text())
+            if address_text and not business["Street"]:
+                zip_match = re.search(r"(\d{5}(?:-\d{4})?)\s*$", address_text)
+                if zip_match and not business["Zipcode"]:
+                    business["Zipcode"] = zip_match.group(1)
+                street = address_text
+                if business["City"]:
+                    idx = address_text.lower().find(business["City"].lower())
+                    if idx > 0:
+                        street = address_text[:idx].rstrip(", ").strip()
+                business["Street"] = street
+            i += 2
+            continue
+
+        if label == "Phone:" and i + 1 < len(paragraphs):
+            phone_text = _bpublic_clean_value(paragraphs[i + 1].get_text())
+            if phone_text and not business["Phone"]:
+                business["Phone"] = phone_text
+            i += 2
+            continue
+
+        if label == "Website:" and i + 1 < len(paragraphs):
+            link = paragraphs[i + 1].find("a", href=True)
+            website_text = link["href"].strip() if link else _bpublic_clean_value(paragraphs[i + 1].get_text())
+            if website_text and not business["Website URL"]:
+                business["Website URL"] = urljoin(url, website_text)
+            i += 2
+            continue
+
+        if label == "About Us:":
+            i += 1
+            continue
+
+        text = clean(paragraphs[i].get_text())
+        if is_meaningful(text) and text not in ("Address:", "Phone:", "Website:", "About Us:"):
+            desc_parts.append(text)
+        i += 1
+
+    if desc_parts and not business["Description"]:
+        business["Description"] = "\n\n".join(desc_parts)
+
+
+def parse_bpublic(url, html):
 
     soup = BeautifulSoup(html, "lxml")
     business = empty_business()
 
-    # ---- JSON-LD ----
-    for script in soup.find_all("script", type="application/ld+json"):
+    # ---- Bot-wall guard ----
+    if _looks_blocked(html):
+        return business
 
-        if not script.string:
-            continue
+    # ---- Business Name ----
+    company_el = soup.select_one(".table-display-company .textbox-company")
+    if company_el:
+        business["Business Name"] = clean(company_el.get_text())
+    if not business["Business Name"]:
+        h1 = soup.select_one(".header-member-name h1")
+        if h1:
+            business["Business Name"] = clean(h1.get_text())
 
-        try:
-            obj = json.loads(script.string)
-        except Exception:
-            continue
+    # ---- Category (badge under the name, e.g. "Professional Services") ----
+    category_el = soup.select_one(".profile-header-top-category")
+    if category_el:
+        business["Category"] = clean(category_el.get_text())
 
-        objects = obj if isinstance(obj, list) else [obj]
+    # ---- Structured address rows (when a listing fills them in) ----
+    business["Street"] = _bpublic_field(soup, "address1") or _bpublic_field(soup, "street")
+    business["City"] = _bpublic_field(soup, "city")
+    business["State"] = _bpublic_field(soup, "state_ln") or _bpublic_field(soup, "state")
+    business["Zipcode"] = _bpublic_field(soup, "zip_code") or _bpublic_field(soup, "zipcode")
+    business["Country"] = _bpublic_field(soup, "country_ln") or _bpublic_field(soup, "country")
 
-        for data in objects:
+    # ---- Country / State / City / Category fallback: breadcrumb trail
+    #      (Home > Country > State > City > Category) ----
+    crumbs = [clean(s.get_text()) for s in soup.select(".breadcrumb span[itemprop='name']")]
+    if crumbs and crumbs[0].lower() == "home":
+        crumbs = crumbs[1:]
+    if len(crumbs) >= 1 and not business["Country"]:
+        business["Country"] = crumbs[0]
+    if len(crumbs) >= 2 and not business["State"]:
+        business["State"] = crumbs[1]
+    if len(crumbs) >= 3 and not business["City"]:
+        business["City"] = crumbs[2]
+    if len(crumbs) >= 4 and not business["Category"]:
+        business["Category"] = crumbs[3]
 
-            if not isinstance(data, dict):
-                continue
+    # ---- Phone (structured row, tel: link, or reveal-on-click header) ----
+    phone_el = soup.select_one(".table-display-phone_number .phone") \
+        or soup.select_one(".table-display-phone .phone")
+    if phone_el:
+        business["Phone"] = clean(phone_el.get_text())
+    if not business["Phone"]:
+        phone_header = soup.select_one(".phone_number_header")
+        if phone_header:
+            business["Phone"] = clean(phone_header.get_text())
+    if not business["Phone"]:
+        tel = soup.select_one('a[href^="tel:"]')
+        if tel:
+            business["Phone"] = clean(tel["href"].replace("tel:", ""))
 
-            if data.get("@type") not in (
-                "LocalBusiness", "Organization", "Corporation",
-                "Store", "ProfessionalService",
-            ):
-                continue
+    # ---- Website URL (structured row) ----
+    website_el = soup.select_one(".table-display-website a[href]") \
+        or soup.select_one(".table-display-website .weblink[href]")
+    if website_el:
+        business["Website URL"] = website_el["href"]
 
-            business["Business Name"] = data.get("name", business["Business Name"])
+    # ---- Hours (structured row, when a listing has one) ----
+    hours_el = soup.select_one(".table-display-hours")
+    if hours_el:
+        business["Hours"] = clean(hours_el.get_text())
 
-            img = data.get("image")
-            if img:
-                business["Logo"] = urljoin(url, img)
+    # ---- Description + Address/Phone/Website fallback: the "About" box.
+    #      On many listings this is just free-text description, but on
+    #      some (e.g. "Focal") it also carries Address/Phone/Website as
+    #      label/value paragraph pairs when the structured rows above
+    #      were left empty. ----
+    about_el = soup.select_one(".table-display-about_me .froala-data") \
+        or soup.select_one(".field-about_me")
+    if about_el:
+        paragraphs = [clean(p.get_text()) for p in about_el.find_all("p")]
+        paragraphs = [p for p in paragraphs if p]
+        has_labels = any(p in ("Address:", "Phone:", "Website:", "About Us:") for p in paragraphs)
 
-            addr = data.get("address", {})
-            business["Street"] = addr.get("streetAddress", business["Street"])
+        if has_labels:
+            _parse_bpublic_about_block(business, about_el, url)
+        elif paragraphs:
+            business["Description"] = "\n".join(paragraphs)
 
-            locality = addr.get("addressLocality", "")
-            if "-" in locality:
-                city, state = locality.split("-", 1)
-                business["City"] = city.strip()
-                business["State"] = state.strip()
-            else:
-                business["City"] = locality
+    if not business["Description"]:
+        meta = soup.find("meta", attrs={"name": "description"})
+        if meta and meta.get("content"):
+            business["Description"] = clean(meta["content"])
 
-            business["Zipcode"] = addr.get("postalCode", business["Zipcode"])
-            business["Country"] = addr.get("addressCountry", business["Country"])
-
-            if data.get("telephone"):
-                business["Phone"] = data["telephone"]
-
-            if data.get("description"):
-                business["Description"] = clean(data["description"])
-
-            if data.get("email"):
-                business["Business Email"] = data["email"]
-
-            if data.get("openingHours"):
-                business["Hours"] = data["openingHours"]
-
-            if data.get("openingHoursSpecification"):
-                business["Hours"] = data["openingHoursSpecification"]
-
-            if data.get("sameAs"):
-                links = data["sameAs"]
-                if isinstance(links, list):
-                    for link in links:
-                        for domain, name in SOCIAL_DOMAINS.items():
-                            if domain in link.lower():
-                                business["Social Media Links"][name] = link
-
-    # ---- Meta description ----
-    meta = soup.find("meta", attrs={"name": "description"})
-
-    if meta:
-        description = clean(meta.get("content", ""))
-
-        if description and not business["Description"]:
-            business["Description"] = description
-
-        match = re.search(r"Company specialized in (.+?)\.", description, re.I)
-        if match:
-            business["Category"] = match.group(1).strip()
-    show_more = soup.select_one("nf-show-more-text")
-
-    if show_more:
-        full_text = clean_multiline(show_more.get("text", ""))
-        if full_text:
-            business["Description"] = full_text
-
-    # ---- OpenGraph ----
-    for meta in soup.find_all("meta"):
-        prop = meta.get("property", "").lower()
-
-        if prop == "og:image" and not business["Logo"]:
-            business["Logo"] = urljoin(url, meta.get("content", ""))
-        elif prop == "og:title" and not business["Business Name"]:
-            business["Business Name"] = meta.get("content", "")
-        elif prop == "og:description" and not business["Description"]:
-            business["Description"] = meta.get("content", "")
-
-    # ---- Phone ----
-    tel = soup.select_one('a[href^="tel:"]')
-    if tel:
-        business["Phone"] = tel["href"].replace("tel:", "").strip()
-
-    # ---- Email ----
-    email = soup.select_one('a[href^="mailto:"]')
-    if email:
-        business["Business Email"] = email["href"].replace("mailto:", "").strip()
-
-    # ---- Website URL (external site only, checked before Social) ----
-    for a in soup.find_all("a", href=True):
-        href = a["href"]
-
-        redirect_target = _extract_nearfinder_redirect_url(href)
-        if redirect_target:
-            if any(domain in redirect_target.lower() for domain in SOCIAL_DOMAINS):
-                continue
-            if _is_maps_link(redirect_target):
-                if not business["GBP Link"]:
-                    business["GBP Link"] = redirect_target
-                continue
-            business["Website URL"] = redirect_target
-            break
-
-        if not href.startswith("http"):
-            continue
-        if "nearfinderus.com" in href.lower() or "nearfinder.com" in href.lower():
-            continue
-        if any(domain in href.lower() for domain in SOCIAL_DOMAINS):
-            continue
-        if _is_maps_link(href):
-            if not business["GBP Link"]:
-                business["GBP Link"] = href
-            continue
-
-        if not business["Website URL"]:
-            business["Website URL"] = href
-            break
-
-    # ---- Social Media ----
-    for a in soup.find_all("a", href=True):
-        href = a["href"]
-
-        redirect_target = _extract_nearfinder_redirect_url(href)
-        link_target = redirect_target if redirect_target else href
-
-        for domain, network in SOCIAL_DOMAINS.items():
-            if domain in link_target.lower():
-                business["Social Media Links"][network] = link_target
-
-    # ---- Hours (HTML fallback -- table, not JSON-LD) ----
-    if not business["Hours"]:
-        hours_table = soup.select_one("div.table-horario-funcionamento table")
-
-        if hours_table:
-            hours_list = []
-            for tr in hours_table.select("tbody tr"):
-                cells = tr.find_all("td")
-                if len(cells) >= 2:
-                    day = clean(cells[0].get_text())
-                    time_range = clean(cells[1].get_text())
-                    if day and time_range:
-                        hours_list.append(f"{day}: {time_range}")
-
-            if hours_list:
-                business["Hours"] = "; ".join(hours_list)
-
-    # ---- Category (link-based fallback) ----
-    if not business["Category"]:
-        category_links = soup.select('a[href*="/business-directory/category_"]')
-        categories = []
-
-        for a in category_links:
-            text = clean(a.get_text())
-            if text and text not in categories:
-                categories.append(text)
-
-        if categories:
-            business["Category"] = ", ".join(categories)
+    # ---- Logo ----
+    logo_el = soup.select_one(".profile-image img")
+    if logo_el and logo_el.get("src"):
+        business["Logo"] = urljoin(url, logo_el["src"])
+    if not business["Logo"]:
+        og_image = soup.find("meta", property="og:image")
+        if og_image and og_image.get("content"):
+            business["Logo"] = urljoin(url, og_image["content"])
 
     return business
 
@@ -1199,7 +1179,7 @@ def parse_blinx(url, html):
 # ==========================================================
 
 _PLACE123_LABELS = {
-    "owner name": None,
+    "owner name": "Owner Name",
     "phone": "Phone",
     "website": "Website URL",
     "url": "Website URL",
@@ -1853,7 +1833,7 @@ def parse_gravitysplash(url, html):
 # ==========================================================
 _WEBFORCOMPANY_LABELS = {
     "business name": "Business Name",
-    "owner name": None,
+    "owner name": "Owner Name",
     "phone": "Phone",
     "website": "Website URL",
     "business email": None,  # real value comes from _find_cf_email, not this text
@@ -2043,6 +2023,29 @@ def parse_provenexpert(url, html):
                 business["Zipcode"] = lines[3]
             if len(lines) >= 5 and not business["Country"]:
                 business["Country"] = lines[4]
+
+        # ---- Owner Name ("Contact person" label, with the name itself
+        #      sitting as a bare text node right after a <br> rather than
+        #      inside its own tag) ----
+        for strong in contact.find_all("strong"):
+            if clean(strong.get_text()).lower() != "contact person":
+                continue
+
+            owner_name = ""
+            node = strong.next_sibling
+            while node is not None:
+                if isinstance(node, NavigableString):
+                    text = clean(str(node))
+                    if text:
+                        owner_name = text
+                        break
+                elif getattr(node, "name", None) != "br":
+                    break
+                node = node.next_sibling
+
+            if owner_name:
+                business["Owner Name"] = owner_name
+            break
 
         tel = contact.select_one('a[href^="tel:"]')
         if tel:
@@ -3076,6 +3079,44 @@ def parse_chamberofcommerce(url, html):
     if len(crumbs) >= 2:
         business["Category"] = crumbs[-2]
 
+    # ---- Owner Name ("Key Contacts" card: name sits in an <h5>, e.g.
+    #      "Svetlana Reeves", above a job-title <h6> and phone/email) ----
+    contact_card = None
+    for heading in soup.select(".card-body h3.card-title"):
+        if "key contact" in clean(heading.get_text()).lower():
+            contact_card = heading.find_parent("div", class_="card-body")
+            break
+    if contact_card:
+        name_tag = contact_card.select_one("h5")
+        if name_tag:
+            owner_name = clean(name_tag.get_text())
+            if is_meaningful(owner_name):
+                business["Owner Name"] = owner_name
+
+    # ---- Owner Name fallback (FAQPage JSON-LD -- the "Is there a key
+    #      contact at ...?" answer reads "You can contact NAME at PHONE.") ----
+    if not business["Owner Name"]:
+        for script in soup.find_all("script", type="application/ld+json"):
+            if not script.string:
+                continue
+            try:
+                data = json.loads(script.string, strict=False)
+            except Exception:
+                continue
+            if not isinstance(data, dict) or data.get("@type") != "FAQPage":
+                continue
+            for item in data.get("mainEntity", []):
+                if not isinstance(item, dict):
+                    continue
+                if "key contact" not in clean(item.get("name", "")).lower():
+                    continue
+                answer = item.get("acceptedAnswer", {})
+                text = answer.get("text", "") if isinstance(answer, dict) else ""
+                match = re.search(r"contact\s+(.+?)\s+at\b", text, re.I)
+                if match:
+                    business["Owner Name"] = clean(match.group(1))
+            break
+
     # ---- Logo fallback (profile image, if JSON-LD had none) ----
     if not business["Logo"]:
         logo_img = soup.select_one("img.ProfileImage")
@@ -3293,6 +3334,17 @@ def parse_trueen(url, html):
         meta_desc = soup.find("meta", attrs={"name": "description"})
         if meta_desc and is_meaningful(meta_desc.get("content", "")):
             business["Description"] = clean(meta_desc["content"])
+
+    # ---- Owner Name (FAQPage JSON-LD only: "Who is the Owner/CEO/
+    #      Representative of <business>?" -- the HTML-rendered version of
+    #      this question is just a lead-gen form with no real name, so
+    #      only the JSON-LD answer ever carries an actual person's name) ----
+    for question, text in faq.items():
+        if "owner" in question and ("ceo" in question or "representative" in question):
+            owner_name = clean(text)
+            if is_meaningful(owner_name) and "company information" not in owner_name.lower():
+                business["Owner Name"] = owner_name
+            break
 
     # ---- Hours ----
     for question, text in faq.items():
@@ -7542,7 +7594,7 @@ SITE_PARSERS = {
     "qdexx.com": ("requests", parse_qdexx),
     "dbesearch.com": ("requests", parse_dbesearch),
     "locuul.com": ("requests", parse_locuul),
-    "nearfinderus.com": ("requests", parse_nearfinderus),
+    "bpublic.com": ("requests", parse_bpublic),
     "smallbusinessusa.com": ("playwright", parse_smallbusinessusa),
     "zeemaps.com": ("api", parse_zeemaps),
     "callupcontact.com": ("requests", parse_callupcontact),
