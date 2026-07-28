@@ -12,9 +12,9 @@ ALL_FIELDS = [
 ]
 
 SOURCE_FIELDS = {
-    "nearfinderus.com":[
-        "Name",	"Street",	"City",	"State",	"Zipcode",	"Country",	"Phone",	"Website URL",
-        "Description",	"Hours",	"Social Media Links",	"GBP Link",	"Business Email",	"Category",	"Logo"
+    "bpublic.com": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Description", "Hours", "Category", "Logo",
     ],
     "smallbusinessusa.com":[
         "Name",	"Street",	"City",	"State", "Zipcode", "Country",
@@ -42,7 +42,7 @@ SOURCE_FIELDS = {
         "Logo",
     ],
     "place123.net": [
-        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Name", "Owner Name", "Street", "City", "State", "Zipcode", "Country",
         "Phone", "Website URL", "Keywords", "Description",
         "Hours", "Business Email",
         "Category", "Logo",
@@ -71,13 +71,13 @@ SOURCE_FIELDS = {
         "Category",
     ],
     "webforcompany.com": [
-        "Name", "Street", "City", "State", "Zipcode",
+        "Name", "Owner Name", "Street", "City", "State", "Zipcode",
         "Phone", "Website URL", "Keywords", "Description",
         "Hours", "Social Media Links", "GBP Link",
         "Business Email", "Logo",
     ],
     "provenexpert.com": [
-        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Name", "Owner Name", "Street", "City", "State", "Zipcode", "Country",
     "Phone", "Website URL", "Keywords", "Description",
     "Hours", "Social Media Links", "GBP Link", "Business Email",
     "Category", "Logo", "Photos",
@@ -113,12 +113,12 @@ SOURCE_FIELDS = {
         "Social Media Links",	"Category",	"Logo",
     ],
     "chamberofcommerce.com": [
-        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Name", "Owner Name", "Street", "City", "State", "Zipcode", "Country",
         "Phone", "Website URL", "Keywords", "Description", "Hours",
         "Social Media Links", "Business Email", "Category", "Logo", "Photos",
     ],
     "trueen.com": [
-        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Name", "Owner Name", "Street", "City", "State", "Zipcode", "Country",
         "Phone", "Website URL", "Description", "Hours",
         "Social Media Links", "Category",
     ],
