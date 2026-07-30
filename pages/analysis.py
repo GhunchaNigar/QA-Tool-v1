@@ -110,6 +110,7 @@ else:
 
         # Persist results and clear payload so re-visits don't re-run
         st.session_state.results          = results
+        st.session_state.extracted_data   = all_extracted
         st.session_state.user_data        = user_data
         st.session_state.analysis_payload = None  # consumed
 
@@ -121,8 +122,9 @@ else:
         st.stop()
 
 # ── Results section ───────────────────────────────────────────────────────────
-results   = st.session_state.get("results", [])
-user_data = st.session_state.get("user_data", {})
+results        = st.session_state.get("results", [])
+extracted_data = st.session_state.get("extracted_data", [])
+user_data      = st.session_state.get("user_data", {})
 
 if results:
     st.markdown("---")
@@ -137,7 +139,7 @@ if results:
     c2.metric("✅ Correct", correct)
     c3.metric("❌ Issues Found", incorrect)
 
-    excel_bytes = write_excel(results)
+    excel_bytes = write_excel(results, extracted_data, user_data)
     st.download_button(
         label="📥 Download Excel Report",
         data=excel_bytes,
@@ -150,5 +152,6 @@ if results:
     st.markdown("---")
     if st.button("🔄 Run Another Analysis"):
         st.session_state.results          = None
+        st.session_state.extracted_data    = None
         st.session_state.analysis_payload = None
         st.switch_page("app.py")
