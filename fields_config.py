@@ -306,6 +306,25 @@ SOURCE_FIELDS = {
         "Name", "Street", "City", "State", "Zipcode", "Country",
         "Phone", "Website URL", "Description", "Category", "Logo", "Photos",
     ],
+    "trustburn.com": [
+        "Name", "Street", "City", "State", "Zipcode",
+        "Phone", "Website URL", "Description", "Logo",
+    ],
+    "searchmypro.com": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Description", "Hours",
+        "Social Media Links", "Category", "Logo",
+    ],
+    "yourbizlistings.com": [
+        "Name", "Street", "City", "State", "Zipcode",
+        "Phone", "Website URL", "Description", "Hours",
+        "Business Email", "Category", "Logo",
+    ],
+    "bulkpostads.com": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Keywords", "Description", "Hours",
+        "Business Email", "Category", "Logo", "Photos",
+    ],
 }
 
 VISUAL_FIELDS = {"Logo", "Photos"}
