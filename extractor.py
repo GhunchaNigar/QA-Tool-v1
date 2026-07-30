@@ -8,7 +8,7 @@ import random
 import subprocess
 import requests
 import urllib3
-from bs4 import BeautifulSoup, NavigableString
+from bs4 import BeautifulSoup, NavigableString, Comment
 from urllib.parse import urljoin, urlparse, parse_qs
 
 import fields_config
@@ -226,19 +226,39 @@ def _bpublic_clean_value(text):
     return text
 
 
+def _bpublic_normalize_label(text):
+    """Normalize an About-box label paragraph for matching: strip a
+    trailing colon (some listings write "Address", others "Address:")
+    and lowercase (some write "About Us:", others "About us:")."""
+    return clean(text).rstrip(":").strip().lower()
+
+
+_BPUBLIC_ADDRESS_LABEL = "address"
+_BPUBLIC_PHONE_LABEL = "phone"
+_BPUBLIC_WEBSITE_LABEL = "website"
+_BPUBLIC_ABOUT_LABEL = "about us"
+_BPUBLIC_ABOUT_LABELS = {
+    _BPUBLIC_ADDRESS_LABEL, _BPUBLIC_PHONE_LABEL,
+    _BPUBLIC_WEBSITE_LABEL, _BPUBLIC_ABOUT_LABEL,
+}
+
+
 def _parse_bpublic_about_block(business, about_el, url):
     """Some bPUBLIC listings (e.g. "Focal") don't fill in the structured
     address/phone/website rows at all -- instead everything is packed as
-    "Label:" / value paragraph pairs inside the free-text "About" box.
+    "Label" / value paragraph pairs inside the free-text "About" box.
+    Labels appear inconsistently across listings -- with or without a
+    trailing colon, and with varying capitalization (e.g. "Address" vs
+    "Address:", "About Us:" vs "About us:") -- so match them normalized.
     Pull Address/Phone/Website out of that pattern and treat any
     remaining paragraphs as the Description."""
     paragraphs = about_el.find_all("p")
     desc_parts = []
     i = 0
     while i < len(paragraphs):
-        label = clean(paragraphs[i].get_text())
+        label = _bpublic_normalize_label(paragraphs[i].get_text())
 
-        if label == "Address:" and i + 1 < len(paragraphs):
+        if label == _BPUBLIC_ADDRESS_LABEL and i + 1 < len(paragraphs):
             address_text = _bpublic_clean_value(paragraphs[i + 1].get_text())
             if address_text and not business["Street"]:
                 zip_match = re.search(r"(\d{5}(?:-\d{4})?)\s*$", address_text)
@@ -247,20 +267,27 @@ def _parse_bpublic_about_block(business, about_el, url):
                 street = address_text
                 if business["City"]:
                     idx = address_text.lower().find(business["City"].lower())
-                    if idx > 0:
+                    # idx==0 means the city sits at the very start of the
+                    # string (e.g. address_text is just "Plano TX 75023"
+                    # with no street portion at all) -- slicing to idx
+                    # still correctly yields "" in that case, so this must
+                    # be >= 0, not > 0, or that case falls through and
+                    # leaves the untouched "City State Zip" string as the
+                    # Street value.
+                    if idx >= 0:
                         street = address_text[:idx].rstrip(", ").strip()
                 business["Street"] = street
             i += 2
             continue
 
-        if label == "Phone:" and i + 1 < len(paragraphs):
+        if label == _BPUBLIC_PHONE_LABEL and i + 1 < len(paragraphs):
             phone_text = _bpublic_clean_value(paragraphs[i + 1].get_text())
             if phone_text and not business["Phone"]:
                 business["Phone"] = phone_text
             i += 2
             continue
 
-        if label == "Website:" and i + 1 < len(paragraphs):
+        if label == _BPUBLIC_WEBSITE_LABEL and i + 1 < len(paragraphs):
             link = paragraphs[i + 1].find("a", href=True)
             website_text = link["href"].strip() if link else _bpublic_clean_value(paragraphs[i + 1].get_text())
             if website_text and not business["Website URL"]:
@@ -268,12 +295,12 @@ def _parse_bpublic_about_block(business, about_el, url):
             i += 2
             continue
 
-        if label == "About Us:":
+        if label == _BPUBLIC_ABOUT_LABEL:
             i += 1
             continue
 
         text = clean(paragraphs[i].get_text())
-        if is_meaningful(text) and text not in ("Address:", "Phone:", "Website:", "About Us:"):
+        if is_meaningful(text) and label not in _BPUBLIC_ABOUT_LABELS:
             desc_parts.append(text)
         i += 1
 
@@ -360,7 +387,7 @@ def parse_bpublic(url, html):
     if about_el:
         paragraphs = [clean(p.get_text()) for p in about_el.find_all("p")]
         paragraphs = [p for p in paragraphs if p]
-        has_labels = any(p in ("Address:", "Phone:", "Website:", "About Us:") for p in paragraphs)
+        has_labels = any(_bpublic_normalize_label(p) in _BPUBLIC_ABOUT_LABELS for p in paragraphs)
 
         if has_labels:
             _parse_bpublic_about_block(business, about_el, url)
@@ -856,6 +883,9 @@ def parse_zumvu(url, html):
 
         business["Business Name"] = entity.get("name", business["Business Name"])
 
+        if entity.get("about") and is_meaningful(entity["about"]):
+            business["Category"] = clean(entity["about"])
+
         if entity.get("image"):
             business["Logo"] = urljoin(url, entity["image"])
 
@@ -962,6 +992,16 @@ def parse_zumvu(url, html):
         if og_image and og_image.get("content"):
             business["Logo"] = urljoin(url, og_image["content"])
 
+    # ---- Category (folder-icon line under the business name) ----
+    if not business["Category"]:
+        for li in soup.select("ul.profileaddrss li"):
+            icon = li.find("i")
+            if icon and "fa-folder-o" in icon.get("class", []):
+                cat_text = clean(li.get_text())
+                if is_meaningful(cat_text):
+                    business["Category"] = cat_text
+                break
+
     # ---- Category (breadcrumb fallback) ----
     if not business["Category"]:
         crumbs = [clean(a.get_text()) for a in soup.select("ul.breadcrumb a, .breadcrumb a")]
@@ -1000,6 +1040,113 @@ def _split_blinx_address(address):
         state_zip = parts[0]
     else:
         state_zip = ""
+
+    match = re.match(r"^(.*?)\s+([\w-]*\d[\w-]*)$", state_zip.strip())
+    if match:
+        state = match.group(1).strip()
+        zipcode = match.group(2).strip()
+    else:
+        state = state_zip.strip()
+
+    return street, city, state, zipcode
+
+
+# Matches "City State Zip" with zero commas at all (e.g. "Plano TX 75023")
+# -- a street-less address shape seen on several sources. _split_blinx_address
+# only splits on commas, so with none present it dumps the whole "City
+# State" run into "state" and never populates "city". This has broken
+# multiple site parsers (metriteweb, letsknowit, locuul) independently, so
+# it's factored out here as a shared fallback any caller of
+# _split_blinx_address can opt into.
+_CITY_STATE_ZIP_NO_COMMA_RE = re.compile(
+    r"^(?P<city>.+?)\s+(?P<state>[A-Za-z]{2})\s+(?P<zip>\d{5}(?:-\d{4})?)$"
+)
+
+
+def _split_address_allow_no_comma(address):
+    """Like _split_blinx_address, but first checks for the no-street,
+    no-comma "City State Zip" shape before falling back to the
+    comma-based splitter, which mishandles that shape (see
+    _CITY_STATE_ZIP_NO_COMMA_RE above)."""
+    if "," not in address:
+        match = _CITY_STATE_ZIP_NO_COMMA_RE.match(address)
+        if match:
+            return "", match.group("city").strip(), match.group("state").strip(), match.group("zip")
+    return _split_blinx_address(address)
+
+
+def _split_city_state_zip_address(address):
+    """Split addresses with NO street segment, in either of two shapes:
+
+      (a) Comma-free "City State Zip" (e.g. "Plano TX 75023") -- used by
+          askmap.net, blogs.globalbusinessdirectory.us, place123.net,
+          milestones.business, earthmom.org, gravitysplash.com,
+          webforcompany.com, and local-biz.directory.
+
+      (b) Two comma-separated spans, "City State, Zip" (e.g.
+          preferredprofessionals.com renders <span>Plano TX</span>,
+          <span>75023</span> -> "Plano TX, 75023").
+
+    _split_blinx_address() assumes commas separate street/city/state-zip.
+    Shape (a) has no commas at all, so it lands in _split_blinx_address()
+    as one trailing "State Zip" token and mis-splits into
+    state="Plano TX", zipcode="75023", city="" (never populated). Shape
+    (b) fares no better: _split_blinx_address() takes street="Plano TX",
+    state_zip="75023" -- and since "75023" has no internal whitespace to
+    split on, that regex fails too, leaving state="75023" and city blank.
+    Detect both shapes directly here instead of falling through.
+    """
+    address = address.strip()
+
+    # Shape (a): comma-free "City State Zip".
+    if "," not in address:
+        match = _CITY_STATE_ZIP_NO_COMMA_RE.match(address)
+        if match:
+            return "", match.group("city").strip(), match.group("state").strip(), match.group("zip")
+        return _split_blinx_address(address)
+
+    # Shape (b): two comma-separated parts, "City State, Zip".
+    parts = [p.strip() for p in address.split(",") if p.strip()]
+    if len(parts) == 2 and re.match(r"^\d{5}(?:-\d{4})?$", parts[1]):
+        match = re.match(r"^(?P<city>[A-Za-z][A-Za-z .'-]*?)\s+(?P<state>[A-Z]{2})$", parts[0])
+        if match:
+            return "", clean(match.group("city")), match.group("state"), parts[1]
+
+    return _split_blinx_address(address)
+
+
+def _split_listings_gbd_address(address):
+    """Split the My Listing theme's rendered address block.
+
+    Unlike blinx.biz, this theme's map-block-address text has no street
+    segment -- it's just "City, State Zip[, Country]" (e.g.
+    "Plano, Texas 75023, United States"). Reusing _split_blinx_address()
+    here mis-shifts every field by one, because that function assumes a
+    leading street part whenever there are >=2 comma-separated pieces.
+
+    Strategy: drop a trailing country segment (it has no digits, whereas
+    the "State Zip" segment does), then treat whatever's left as
+    City, State Zip -- or Street, City, State Zip if there happen to be
+    three or more parts remaining.
+    """
+    street, city, state, zipcode = "", "", "", ""
+
+    parts = [p.strip() for p in address.split(",") if p.strip()]
+
+    # Trailing country segment has no digits (e.g. "United States"); the
+    # "State Zip" segment right before it does (e.g. "Texas 75023").
+    if len(parts) >= 2 and not re.search(r"\d", parts[-1]):
+        parts = parts[:-1]
+
+    if len(parts) >= 3:
+        street = ", ".join(parts[:-2])
+        city = parts[-2]
+        state_zip = parts[-1]
+    elif len(parts) == 2:
+        city = parts[0]
+        state_zip = parts[1]
+    elif len(parts) == 1:
+        state_zip = parts[0]
 
     match = re.match(r"^(.*?)\s+([\w-]*\d[\w-]*)$", state_zip.strip())
     if match:
@@ -1107,17 +1254,18 @@ def parse_blinx(url, html):
 
         _blinx_links_to_business(business, record.get("links"))
 
-        # The API's "address" field is only ever the bare street (e.g.
+        # The API's "address" field can be a full "Street, City, State Zip"
+        # string, or -- as seen here -- just "City State Zip" with no
+        # street and no commas at all. Use the no-comma-aware splitter so
+        # both shapes are handled; the DOM extraction below overrides this
+        # when it finds a more complete rendered address anyway.
         address = record.get("address", "")
         if address:
-            if "," in address:
-                street, city, state, zipcode = _split_blinx_address(address)
-                business["Street"] = street
-                business["City"] = city
-                business["State"] = state
-                business["Zipcode"] = zipcode
-            else:
-                business["Street"] = clean(address)
+            street, city, state, zipcode = _split_address_allow_no_comma(address)
+            business["Street"] = street
+            business["City"] = city
+            business["State"] = state
+            business["Zipcode"] = zipcode
 
     # ---- Address: prefer the rendered DOM ----
     dom_address = _extract_blinx_address_from_dom(soup)
@@ -1259,12 +1407,14 @@ def parse_place123(url, html):
 
         if name_idx + 2 < len(lines):
             address_line = lines[name_idx + 2]
-            if "," in address_line:
-                street, city, state, zipcode = _split_blinx_address(address_line)
-                business["Street"] = street
-                business["City"] = city
-                business["State"] = state
-                business["Zipcode"] = zipcode
+            # Address line is often comma-free (e.g. "Plano TX 75023"), so
+            # try the comma-free "City ST Zipcode" splitter first and fall
+            # back to the comma-aware splitter for lines that do have commas.
+            street, city, state, zipcode = _split_city_state_zip_address(address_line)
+            business["Street"] = street
+            business["City"] = city
+            business["State"] = state
+            business["Zipcode"] = zipcode
 
         if name_idx + 3 < len(lines) and lines[name_idx + 3].rstrip(":").lower() not in label_keys:
             business["Country"] = lines[name_idx + 3]
@@ -1506,7 +1656,7 @@ def parse_askmap(url, html):
         if address_tag:
             address_text = clean(address_tag.get_text(separator=" "))
             if address_text:
-                street, city, state, zipcode = _split_blinx_address(address_text)
+                street, city, state, zipcode = _split_city_state_zip_address(address_text)
                 business["Street"] = street
                 business["City"] = city
                 business["State"] = state
@@ -1519,8 +1669,12 @@ def parse_askmap(url, html):
         if tel:
             business["Phone"] = tel["href"].replace("tel:", "").strip()
         else:
+            # Match starts with a digit OR an opening paren, so a
+            # parenthesized area code like "(214) 566-1908" isn't
+            # truncated to "214) 566-1908" -- the old [\d]-only start
+            # skipped straight past the leading "(".
             phone_match = re.search(
-                r"[\d][\d\-.\s()]{6,}\d", clean(contact_container.get_text())
+                r"[\d(][\d\-.\s()]{6,}\d", clean(contact_container.get_text())
             )
             if phone_match:
                 business["Phone"] = clean(phone_match.group())
@@ -1654,6 +1808,12 @@ def parse_earthmom(url, html):
         business["Category"] = clean(category_tag.get_text())
 
     # ---- Address ----
+    # This template usually gives a plain streetAddress itemprop, but on
+    # profile pages like this one there's no street at all -- instead
+    # addressLocality holds a merged "City ST" string (e.g. "Plano TX")
+    # and postalCode is a separate sibling span. Fall back to combining
+    # those into a single "City ST Zip" string the comma-less splitter
+    # can parse correctly, the same fix applied for milestones.business.
     address_tag = soup.select_one('[itemprop="streetAddress"]')
     if address_tag:
         address_text = clean(address_tag.get_text(separator=" "))
@@ -1663,6 +1823,19 @@ def parse_earthmom(url, html):
             business["City"] = city
             business["State"] = state
             business["Zipcode"] = zipcode
+    else:
+        locality_tag = soup.select_one('[itemprop="addressLocality"]')
+        if locality_tag:
+            locality_text = clean(locality_tag.get_text())
+            zip_tag = soup.select_one('[itemprop="postalCode"]')
+            zip_text = clean(zip_tag.get_text()) if zip_tag else ""
+            combined = f"{locality_text} {zip_text}".strip()
+            if combined:
+                street, city, state, zipcode = _split_city_state_zip_address(combined)
+                business["Street"] = street
+                business["City"] = city
+                business["State"] = state
+                business["Zipcode"] = zipcode or zip_text
 
     # ---- Phone / Website / Business Email / Description ----
     about_container = soup.select_one(".overview-tab-about-me .textarea-about_me")
@@ -1691,6 +1864,23 @@ def parse_earthmom(url, html):
     country_tag = soup.select_one('[itemprop="addressCountry"]')
     if country_tag:
         business["Country"] = clean(country_tag.get_text())
+
+    # ---- Country fallback: bare text node after the <br> ----
+    # On pages like this one there's no addressCountry itemprop at all --
+    # the country is just plain text sitting directly in the address
+    # container after a <br>, following the addressLocality/postalCode
+    # spans (e.g. "...75023<br />United States of America"). Pull the
+    # last meaningful direct text node out of that container instead.
+    if not business["Country"]:
+        address_container = soup.select_one('[itemprop="address"]')
+        if address_container:
+            text_nodes = [
+                clean(str(node)) for node in address_container.contents
+                if isinstance(node, NavigableString)
+            ]
+            text_nodes = [t for t in text_nodes if is_meaningful(t)]
+            if text_nodes:
+                business["Country"] = text_nodes[-1]
 
     # ---- Hours ----
     hours_tag = soup.select_one('[itemprop="openingHours"]') or soup.select_one(".business-hours")
@@ -1770,7 +1960,12 @@ def parse_gravitysplash(url, html):
     # ---- Address ----
     address_text = _gravitysplash_sidebar_value(soup, "lp-details-address")
     if address_text:
-        street, city, state, zipcode = _split_blinx_address(address_text)
+        # gravitysplash renders a plain comma-free "City ST Zipcode" string
+        # (e.g. "Plano TX 75023"), not "street, city, state zip". Feeding
+        # that into _split_blinx_address() mis-splits it into
+        # state="Plano TX", zipcode="75023", city="" -- use the helper
+        # built for exactly this shape instead.
+        street, city, state, zipcode = _split_city_state_zip_address(address_text)
         business["Street"] = street
         business["City"] = city
         business["State"] = state
@@ -1890,7 +2085,11 @@ def parse_webforcompany(url, html):
 
         if norm == "address":
             if i + 1 < n:
-                street, city, state, zipcode = _split_blinx_address(lines[i + 1])
+                # Rendered as a plain comma-free "City ST Zipcode" line
+                # (e.g. "Plano TX 75023"), same shape gravitysplash.com
+                # uses -- _split_blinx_address() mis-splits that into
+                # state="Plano TX", city="", so use the dedicated helper.
+                street, city, state, zipcode = _split_city_state_zip_address(lines[i + 1])
                 business["Street"] = street
                 business["City"] = city
                 business["State"] = state
@@ -2828,11 +3027,31 @@ def parse_listings_globalbusinessdirectory(url, html):
         business["Business Name"] = clean(jsonld["name"])
 
     # ---- Owner Name (rendered as the listing's "tagline") ----
+    # Caution: this theme's "tagline" field is frequently filled with SEO
+    # keyword stuffing (e.g. "plano real estate agent, plano realtor,
+    # homes for sale plano, ...") rather than an actual person's name.
+    # A real name won't contain commas or run to a dozen+ words, so use
+    # that as a sanity check before trusting it as Owner Name.
     owner_tag = soup.select_one("h2.profile-tagline")
     if owner_tag:
         owner_text = clean(owner_tag.get_text())
-        if is_meaningful(owner_text):
+        looks_like_keyword_list = "," in owner_text or len(owner_text.split()) > 6
+        if is_meaningful(owner_text) and not looks_like_keyword_list:
             business["Owner Name"] = owner_text
+
+    # ---- Owner Name fallback: "Author" block ----
+    # When the tagline is keyword-stuffed (the common case) rather than a
+    # real name, fall back to the listing's Author block
+    # (.block-type-author .host-name). Note this is the directory account
+    # that submitted the listing, not a verified owner-name field -- it
+    # will often be a handle like "RealEstate38" rather than a person's
+    # actual name, so treat it as a best-effort fallback only.
+    if not business["Owner Name"]:
+        author_tag = soup.select_one(".block-type-author .host-name")
+        if author_tag:
+            author_text = clean(author_tag.get_text())
+            if is_meaningful(author_text):
+                business["Owner Name"] = author_text
 
     # ---- Address (Street / City / State / Zipcode) ----
     addr_tag = soup.select_one(".map-block-address p")
@@ -2844,7 +3063,7 @@ def parse_listings_globalbusinessdirectory(url, html):
         elif isinstance(addr_obj, str):
             addr_text = clean(addr_obj)
     if addr_text:
-        street, city, state, zipcode = _split_blinx_address(addr_text)
+        street, city, state, zipcode = _split_listings_gbd_address(addr_text)
         business["Street"] = street
         business["City"] = city
         business["State"] = state
@@ -2907,7 +3126,16 @@ def parse_listings_globalbusinessdirectory(url, html):
         business["Category"] = ", ".join(cat_names)
 
     # ---- Hours (theme renders this as its own block, when present) ----
-    hours_tag = soup.select_one(".block-type-hours .pf-body, .block-type-business_hours .pf-body")
+    # Confirmed on neera-truong-real-estate: the actual markup class is
+    # "block-type-work_hours" (not "block-type-hours" or
+    # "block-type-business_hours" as previously assumed), so the old
+    # selector never matched and Hours came back blank even when the
+    # page had a populated weekly schedule.
+    hours_tag = soup.select_one(
+        ".block-type-work_hours .pf-body, "
+        ".block-type-hours .pf-body, "
+        ".block-type-business_hours .pf-body"
+    )
     if hours_tag:
         hours_text = clean_multiline(hours_tag.get_text(separator="\n"))
         if is_meaningful(hours_text):
@@ -3180,6 +3408,18 @@ def _split_trueen_address(text):
     if parts:
         result["Street"] = ", ".join(parts)
 
+    # This template usually gives "Street, City, State" (comma-separated),
+    # but some listings render the address with NO commas at all -- just
+    # "City ST" left after the zip is stripped off (e.g. "Plano TX").
+    # The comma split above then produces a single part, which the logic
+    # dumps whole into State ("Plano TX") and leaves City blank. Detect
+    # that one-part, comma-free case and split it into city/state instead.
+    if result["City"] == "" and result["Street"] == "" and result["State"]:
+        match = re.match(r"^(?P<city>.+?)\s+(?P<state>[A-Za-z]{2})$", result["State"])
+        if match:
+            result["City"] = clean(match.group("city"))
+            result["State"] = match.group("state")
+
     return result
 
 
@@ -3342,7 +3582,18 @@ def parse_trueen(url, html):
     for question, text in faq.items():
         if "owner" in question and ("ceo" in question or "representative" in question):
             owner_name = clean(text)
-            if is_meaningful(owner_name) and "company information" not in owner_name.lower():
+            # Some listings' JSON-LD just echoes the business name back as
+            # the "answer" (no real owner on file) instead of omitting it
+            # or saying so explicitly -- e.g. answer text ==
+            # "Neera Truong Real Estate", the business's own name. That's
+            # not an owner, so treat it the same as the other placeholder
+            # case ("company information...") and leave Owner Name blank.
+            is_placeholder = (
+                not is_meaningful(owner_name)
+                or "company information" in owner_name.lower()
+                or owner_name.lower() == business["Business Name"].lower()
+            )
+            if not is_placeholder:
                 business["Owner Name"] = owner_name
             break
 
@@ -3353,7 +3604,16 @@ def parse_trueen(url, html):
             break
 
     # ---- Social Media Links -----
+    # Restrict the scan to the business content area and skip the site
+    # footer entirely -- the footer carries TRUEen's OWN contact links
+    # (e.g. its own WhatsApp number, its own Facebook/Twitter/LinkedIn),
+    # which have nothing to do with the listed business. Previously only
+    # the three own-brand profile URLs were excluded, so the footer's
+    # WhatsApp link was getting misattributed to every single listing.
+    footer = soup.select_one("div.footer")
     for a in soup.find_all("a", href=True):
+        if footer and footer in a.parents:
+            continue
         href = a["href"].strip()
         if not href or href == "#" or href.lower().startswith("javascript:"):
             continue
@@ -4120,7 +4380,12 @@ def parse_americansearch(url, html):
         if og_title and og_title.get("content"):
             business["Business Name"] = clean(re.sub(r"\s+on\s+AMERICAN SEARCH\s*$", "", og_title["content"], flags=re.I))
 
-    # ---- Address -- 
+    # ---- Address --
+    # Most listings on this site have no dedicated streetAddress element;
+    # the address only appears as a PostalAddress microdata block with
+    # addressLocality (e.g. "Plano TX") and postalCode as siblings, plus a
+    # trailing country line. Try streetAddress first for the rare listing
+    # that has one, then fall back to parsing the address block directly.
     addr_tag = soup.select_one('[itemprop="streetAddress"]')
     if addr_tag:
         street, city, state, zipcode = _split_blinx_address(clean(addr_tag.get_text()))
@@ -4128,6 +4393,21 @@ def parse_americansearch(url, html):
         business["City"] = city
         business["State"] = state
         business["Zipcode"] = zipcode
+    else:
+        addr_block = soup.select_one('[itemprop="address"][itemtype*="PostalAddress"]')
+        if addr_block:
+            locality_tag = addr_block.select_one('[itemprop="addressLocality"]')
+            zip_tag = addr_block.select_one('[itemprop="postalCode"]')
+            if locality_tag:
+                locality_text = clean(locality_tag.get_text())
+                match = re.match(r"^(.*?)\s+([A-Z]{2})$", locality_text)
+                if match:
+                    business["City"] = match.group(1).strip()
+                    business["State"] = match.group(2)
+                else:
+                    business["City"] = locality_text
+            if zip_tag:
+                business["Zipcode"] = clean(zip_tag.get_text())
 
     # ---- Country  ----
     crumbs = [clean(s.get_text()) for s in soup.select('ol.breadcrumb span[itemprop="name"]')]
@@ -4199,13 +4479,26 @@ def parse_blogs_globalbusinessdirectory(url, html):
                 re.sub(r"\s*[&#8211;\-]+.*$", "", title_tag.get_text())
             )
 
-    # ---- Label/value  ----
+    # ---- Label/value block ----
+    # The theme renders each field as "Label<br/>Value<br/>Label<br/>
+    # Value..." all inside ONE <p>, with no separator other than <br/>
+    # between them. p.get_text() (no separator) ignores <br/> and
+    # concatenates every text node directly, collapsing the whole
+    # field list into a single unbroken blob, e.g.
+    # "Owner NameNeera TruongAddressPlano TX 75023Phone...". Since the
+    # section regex below only matches a label at the very start of a
+    # line, that blob let just the *first* label ("Owner Name") match
+    # at position 0, and it then swallowed everything else in the <p>
+    # as its own value -- every other field came back empty.
+    # get_text(separator="\n") puts a newline between each text node
+    # instead, restoring one label/value per line as clean_multiline
+    # expects.
     description = ""
     content_block = soup.select_one("div.post-content.theme-blog-details")
     if content_block:
         lines = []
         for p in content_block.find_all("p", recursive=False):
-            text = clean(p.get_text())
+            text = clean_multiline(p.get_text(separator="\n"))
             if text:
                 lines.append(text)
         description = "\n".join(lines)
@@ -4223,7 +4516,7 @@ def parse_blogs_globalbusinessdirectory(url, html):
     # ---- Address -> Street / City / State / Zipcode ----
     address = sections.get("Address", "")
     if address:
-        street, city, state, zipcode = _split_blinx_address(address)
+        street, city, state, zipcode = _split_city_state_zip_address(address)
         business["Street"] = street
         business["City"] = city
         business["State"] = state
@@ -4236,20 +4529,23 @@ def parse_blogs_globalbusinessdirectory(url, html):
     # ---- Website URL ----
     if sections.get("Website"):
         business["Website URL"] = sections["Website"]
-    if not business["Website URL"]:
-        # Fallback: the rendered body wraps the URL in an <a> tag right
-        # after a "Website" label paragraph.
-        for strong in soup.select("div.post-content.theme-blog-details strong"):
-            if clean(strong.get_text()).lower() == "website":
-                value_p = strong.find_parent("p").find_next_sibling("p")
-                link = value_p.find("a") if value_p else None
-                if link and link.get("href"):
-                    business["Website URL"] = clean(link["href"])
+    if not business["Website URL"] and content_block:
+        # Fallback for when the URL is rendered as a clickable <a> link
+        # instead of plain text: grab the first outbound link in the
+        # field block (skip the site's own domain, mailto/tel links).
+        for a in content_block.select("a[href]"):
+            href = a["href"].strip()
+            if href.lower().startswith(("http://", "https://")) and "globalbusinessdirectory.us" not in href.lower():
+                business["Website URL"] = href
                 break
 
     # ---- Business Email ----
     if sections.get("Business Email"):
         business["Business Email"] = sections["Business Email"]
+    if not business["Business Email"] and content_block:
+        mailto = content_block.select_one("a[href^='mailto:']")
+        if mailto:
+            business["Business Email"] = clean(mailto["href"][len("mailto:"):].split("?")[0])
 
     # ---- Description ("About Us" section) ----
     if sections.get("About Us"):
@@ -4258,6 +4554,13 @@ def parse_blogs_globalbusinessdirectory(url, html):
     # ---- Keywords ("Related Searches" section) ----
     if sections.get("Related Searches"):
         business["Keywords"] = sections["Related Searches"]
+
+    # ---- Category ----
+    category_link = soup.select_one(".post-category-box a")
+    if category_link:
+        cat_text = clean(category_link.get_text())
+        if is_meaningful(cat_text):
+            business["Category"] = cat_text
 
     # ---- Logo ----
     og_image = soup.find("meta", property="og:image")
@@ -4571,8 +4874,12 @@ def parse_yplocal(url, html):
             break
 
     # ---- Address (single unstructured string -> Street/City/State/Zip) ----
-    addr_span = soup.select_one(".overview-tab-the-member-address .col-sm-8 span")
-    addr_text = clean(addr_span.get_text()) if addr_span else ""
+    # The address container holds multiple sibling <span> elements (e.g.
+    # <span>Plano TX</span>, <span>75023</span>) -- selecting just the
+    # first <span> drops everything after it (the zip code). Pull the
+    # whole container's text instead.
+    addr_container = soup.select_one(".overview-tab-the-member-address .col-sm-8")
+    addr_text = clean(addr_container.get_text()) if addr_container else ""
 
     match = _YPLOCAL_ADDRESS_RE.match(addr_text) if addr_text else None
     if match:
@@ -4580,11 +4887,27 @@ def parse_yplocal(url, html):
         business["City"] = clean(match.group("city"))
         business["State"] = clean(match.group("state"))
         business["Zipcode"] = match.group("zip")
-    elif addr_text:
-        # Fall back to storing the raw string as Street rather than
-        # dropping the address entirely if it doesn't match the
-        # expected "Street, City, State Zip" shape.
-        business["Street"] = addr_text
+    else:
+        # No street on file -- the address is just "City ST, Zipcode"
+        # (e.g. "Plano TX, 75023"), so split the "City ST" chunk from
+        # the trailing zip, then split city from the 2-letter state.
+        city_state_zip = re.match(
+            r"^(?P<city_state>.+?),\s*(?P<zip>\d{5}(?:-\d{4})?)$", addr_text
+        ) if addr_text else None
+        if city_state_zip:
+            city_state = city_state_zip.group("city_state").strip()
+            business["Zipcode"] = city_state_zip.group("zip")
+            cs_match = re.match(r"^(.*?)\s+([A-Z]{2})$", city_state)
+            if cs_match:
+                business["City"] = cs_match.group(1).strip()
+                business["State"] = cs_match.group(2)
+            else:
+                business["City"] = city_state
+        elif addr_text:
+            # Fall back to storing the raw string as Street rather than
+            # dropping the address entirely if it doesn't match any of
+            # the expected shapes.
+            business["Street"] = addr_text
 
     # ---- Country  ----
     addr_obj = ld_business.get("address")
@@ -4895,7 +5218,10 @@ def parse_findabusinesspro(url, html):
 
     # ---- Phone ----
     for i, para_text in enumerate(about_paragraphs):
-        if para_text.strip().lower() == "phone:" and i + 1 < len(about_paragraphs):
+        # Label paragraph is sometimes "Phone" and sometimes "Phone:" --
+        # this template isn't consistent about the trailing colon, so
+        # strip it before comparing instead of requiring it.
+        if para_text.strip().lower().rstrip(":") == "phone" and i + 1 < len(about_paragraphs):
             candidate = about_paragraphs[i + 1]
             if is_meaningful(candidate):
                 business["Phone"] = candidate
@@ -4908,7 +5234,10 @@ def parse_findabusinesspro(url, html):
         desc_text = clean_multiline(about.get_text(separator="\n"))
         lines = [
             line for line in desc_text.split("\n")
-            if line.strip().lower() not in ("phone:", "website:")
+            # Label lines appear with or without a trailing colon
+            # ("Phone" / "Phone:") depending on the listing, so strip it
+            # before comparing. "About us" is a label too, not content.
+            if line.strip().lower().rstrip(":") not in ("phone", "website", "about us")
             and line.strip() != business["Phone"]
             and line.strip() != business["Website URL"]
         ]
@@ -4926,15 +5255,29 @@ def parse_findabusinesspro(url, html):
     addr_container = soup.select_one(".overview-tab-the-member-address .col-sm-8")
     if addr_container:
         addr_spans = addr_container.find_all("span", recursive=False)
-        if len(addr_spans) >= 4:
-            business["Street"] = clean(addr_spans[0].get_text())
-            business["City"] = clean(addr_spans[1].get_text())
-            business["State"] = clean(addr_spans[2].get_text())
-            business["Zipcode"] = clean(addr_spans[3].get_text())
+        span_texts = [clean(s.get_text()) for s in addr_spans]
+        span_texts = [t for t in span_texts if t]
+        if len(span_texts) >= 4:
+            business["Street"] = span_texts[0]
+            business["City"] = span_texts[1]
+            business["State"] = span_texts[2]
+            business["Zipcode"] = span_texts[3]
+        elif len(span_texts) == 3:
+            # Template omits the Street span entirely when a member hasn't
+            # entered one (rather than rendering it empty), so 3 spans here
+            # means City, State, Zip with no street -- not the first 3 of
+            # a 4-part street/city/state/zip layout.
+            business["City"] = span_texts[0]
+            business["State"] = span_texts[1]
+            business["Zipcode"] = span_texts[2]
+        elif len(span_texts) == 2:
+            business["City"] = span_texts[0]
+            business["State"] = span_texts[1]
+        elif len(span_texts) == 1:
+            business["City"] = span_texts[0]
         elif not business["Street"]:
-            # Fall back to storing the raw container text as Street rather
-            # than dropping the address entirely if the expected span
-            # layout isn't present.
+            # No spans at all -- fall back to storing the raw container
+            # text as Street rather than dropping the address entirely.
             addr_text = clean(addr_container.get_text())
             if is_meaningful(addr_text):
                 business["Street"] = addr_text
@@ -5268,14 +5611,17 @@ def parse_thebusinessminded(url, html):
             business["City"] = clean(direct_spans[1].get_text())
             business["State"] = clean(direct_spans[2].get_text())
             business["Zipcode"] = clean(direct_spans[3].get_text())
-
-            addr_copy = BeautifulSoup(str(addr_div), "lxml")
-            for br in addr_copy.find_all("br"):
-                br.replace_with("\n")
-            lines = [clean(line) for line in addr_copy.get_text().split("\n")]
-            lines = [line for line in lines if line]
-            if lines and not re.search(r"\d", lines[-1]):
-                business["Country"] = lines[-1]
+        elif len(direct_spans) == 3:
+            # This template variant has no street span at all -- just
+            # "<span>City</span>, <span>State</span>, <span>Zip</span>"
+            # (e.g. "Plano", "Texas", "75023"). The old code only handled
+            # the 4-span case and fell through to feeding the WHOLE
+            # address blob -- including the trailing country text glued
+            # on with no separating space -- into the comma-based street
+            # splitter, producing garbage like State="75023United States".
+            business["City"] = clean(direct_spans[0].get_text())
+            business["State"] = clean(direct_spans[1].get_text())
+            business["Zipcode"] = clean(direct_spans[2].get_text())
         else:
             raw_address = clean(addr_div.get_text())
             if raw_address:
@@ -5284,6 +5630,20 @@ def parse_thebusinessminded(url, html):
                 business["City"] = city
                 business["State"] = state
                 business["Zipcode"] = zipcode
+
+        # ---- Country ----
+        # Sits as bare text directly after a <br> in this same container,
+        # with no whitespace separating it from the zipcode in the raw
+        # text (e.g. "...75023United States"). Replace <br> with a real
+        # newline before extracting text so the split is reliable no
+        # matter how many address spans preceded it.
+        addr_copy = BeautifulSoup(str(addr_div), "lxml")
+        for br in addr_copy.find_all("br"):
+            br.replace_with("\n")
+        lines = [clean(line) for line in addr_copy.get_text().split("\n")]
+        lines = [line for line in lines if line]
+        if lines and not re.search(r"\d", lines[-1]):
+            business["Country"] = lines[-1]
 
     # ---- Website URL ----
     website_el = soup.select_one(".table-display-website a[href]")
@@ -5407,15 +5767,34 @@ def parse_milestones(url, html):
             business["Category"] = cat_text
 
     # ---- Address  ----
+    # This theme renders the address as "Plano TX" in a span, with the
+    # zipcode as a bare, un-wrapped text node elsewhere in the same <p>
+    # (after the country/delimiter spans) -- it's never inside any
+    # selectable element on its own. Grab that stray text node here and
+    # stitch it back onto the "City ST" span text before splitting, so
+    # we hand the comma-less splitter a normal "Plano TX 75023" string
+    # instead of losing the zip entirely.
     addr_span = soup.select_one("span.acadp-street-address")
     if addr_span:
         addr_text = clean(addr_span.get_text())
+
+        zip_text = ""
+        addr_p = soup.select_one("p.acadp-address")
+        if addr_p:
+            for node in addr_p.contents:
+                if isinstance(node, NavigableString):
+                    candidate = clean(str(node))
+                    if re.match(r"^\d{5}(?:-\d{4})?$", candidate):
+                        zip_text = candidate
+                        break
+
         if addr_text:
-            street, city, state, zipcode = _split_blinx_address(addr_text)
+            combined = f"{addr_text} {zip_text}".strip()
+            street, city, state, zipcode = _split_city_state_zip_address(combined)
             business["Street"] = street
             business["City"] = city
             business["State"] = state
-            business["Zipcode"] = zipcode
+            business["Zipcode"] = zipcode or zip_text
 
     # ---- Country ----
     country_span = soup.select_one("span.acadp-country-name")
@@ -5463,25 +5842,47 @@ def parse_milestones(url, html):
 # ==========================================================
 
 def _split_iformative_address(address):
-    """Split an iFormative-style "Street[, Suite], City, State, Zip"
-    address string. Unlike _split_blinx_address, City/State/Zip are each
-    their own comma segment here rather than "State Zip" sharing one
-    trailing token, so a bare-ZIP last segment is checked for first."""
+    """Split an iFormative-style address string. Handles two distinct
+    shapes depending on whether Zip is its own trailing comma segment:
+
+      (a) "...[, Street], City State, Zip" -- Zip is its own segment,
+          and City+State are merged into the segment right before it
+          with no comma between them (e.g. "Plano TX, 75023", or
+          "123 Main St, Plano TX, 75023" when a Street is present).
+      (b) "...[, Street], City, State, Zip" -- City and State are each
+          their own comma segment too, so the segment before Zip is a
+          bare State with no space in it.
+      (c) "Street, City, State Zip" -- State+Zip share one trailing
+          token with a space, no comma between them (fallback below).
+    """
     street, city, state, zipcode = "", "", "", ""
 
     parts = [p.strip() for p in address.split(",") if p.strip()]
     if not parts:
         return street, city, state, zipcode
 
-    if len(parts) >= 4 and re.fullmatch(r"\d{5}(?:-\d{4})?", parts[-1]):
+    if len(parts) >= 2 and re.fullmatch(r"\d{5}(?:-\d{4})?", parts[-1]):
         zipcode = parts[-1]
-        state = parts[-2]
-        city = parts[-3]
-        street = ", ".join(parts[:-3])
+        rest = parts[:-1]
+        last = rest[-1]
+        merged = re.match(r"^(.*?)\s+([A-Za-z]{2,})$", last)
+        if merged:
+            # Shape (a): last segment before Zip is "City State" merged.
+            city = merged.group(1).strip()
+            state = merged.group(2).strip()
+            street = ", ".join(rest[:-1])
+        else:
+            # Shape (b): last segment before Zip is a bare State; the
+            # segment before that (if any) is a bare City.
+            state = last
+            if len(rest) >= 2:
+                city = rest[-2]
+                street = ", ".join(rest[:-2])
         return street, city, state, zipcode
 
     # Fallback shape: "Street, City, State Zip" (state+zip sharing one
-    # trailing token), in case some listings punctuate differently.
+    # trailing token, no comma between them, and no bare trailing Zip
+    # segment for the branch above to key off of).
     if len(parts) >= 3:
         street = ", ".join(parts[:-2])
         city = parts[-2]
@@ -5690,7 +6091,7 @@ def parse_preferredprofessionals(url, html):
     if addr_div:
         raw_address = clean(addr_div.get_text())
         if raw_address:
-            street, city, state, zipcode = _split_blinx_address(raw_address)
+            street, city, state, zipcode = _split_city_state_zip_address(raw_address)
             business["Street"] = street
             business["City"] = city
             business["State"] = state
@@ -5797,6 +6198,15 @@ def parse_bestdealfinder(url, html):
             business["City"] = clean(addr_spans[1].get_text())
             business["State"] = clean(addr_spans[2].get_text())
             business["Zipcode"] = clean(addr_spans[3].get_text())
+        elif len(addr_spans) == 3:
+            # Some listings (e.g. this one) render only City/State/Zip with
+            # NO street span at all: <span>Plano</span>, <span>Texas</span>,
+            # <span>75023</span>. Treating spans[0] as "Street" here (as the
+            # >=4 branch does) would put "Plano" in Street and leave City
+            # permanently blank -- shift the mapping down by one instead.
+            business["City"] = clean(addr_spans[0].get_text())
+            business["State"] = clean(addr_spans[1].get_text())
+            business["Zipcode"] = clean(addr_spans[2].get_text())
         elif not business["Street"]:
             addr_text = clean(addr_container.get_text())
             if is_meaningful(addr_text):
@@ -5919,18 +6329,40 @@ def parse_911getit(url, html):
             line for line in addr_el.get_text(separator="|", strip=True).split("|")
             if line
         ]
-        if lines:
-            business["Street"] = lines[0]
-        if len(lines) >= 2:
-            parts = [clean(p) for p in lines[1].split(",")]
+
+        def _looks_like_city_state_zip(line):
+            parts = [clean(p) for p in line.split(",")]
+            return len(parts) >= 2 and bool(re.search(r"\d{5}(?:-\d{4})?$", parts[-1]))
+
+        if lines and _looks_like_city_state_zip(lines[0]):
+            # Some listings (e.g. this one) render NO street line at all --
+            # the first line is already "City, State, Zip" followed only by
+            # Country: "Plano, Texas, 75023<br>United States" (2 lines, not
+            # 3). Treating lines[0] as Street here (as the else-branch below
+            # assumes) leaves City/State/Zip blank and misreads the trailing
+            # Country line as City.
+            parts = [clean(p) for p in lines[0].split(",")]
             if len(parts) >= 1 and parts[0]:
                 business["City"] = parts[0]
             if len(parts) >= 2 and parts[1]:
                 business["State"] = parts[1]
             if len(parts) >= 3 and parts[2]:
                 business["Zipcode"] = parts[2]
-        if len(lines) >= 3 and lines[2]:
-            business["Country"] = lines[2]
+            if len(lines) >= 2 and lines[1]:
+                business["Country"] = lines[1]
+        else:
+            if lines:
+                business["Street"] = lines[0]
+            if len(lines) >= 2:
+                parts = [clean(p) for p in lines[1].split(",")]
+                if len(parts) >= 1 and parts[0]:
+                    business["City"] = parts[0]
+                if len(parts) >= 2 and parts[1]:
+                    business["State"] = parts[1]
+                if len(parts) >= 3 and parts[2]:
+                    business["Zipcode"] = parts[2]
+            if len(lines) >= 3 and lines[2]:
+                business["Country"] = lines[2]
 
     # ---- Country fallback (LocalBusiness JSON-LD) ----
     if not business["Country"]:
@@ -6045,7 +6477,11 @@ def parse_touchafro(url, html):
     if address:
         addr_parts = [clean(p) for p in address.split(",")]
         state_zip_match = re.match(r"^(.*\S)\s+(\d{5}(?:-\d{4})?)$", addr_parts[-1]) if addr_parts else None
-        if state_zip_match and len(addr_parts) >= 2:
+        if state_zip_match:
+            # Works whether or not a Street segment precedes State+Zip --
+            # when addr_parts has only this one element (no comma at all,
+            # e.g. "TX 75023" with no street on file), addr_parts[:-1] is
+            # simply empty and Street correctly comes out blank.
             business["State"] = state_zip_match.group(1)
             business["Zipcode"] = state_zip_match.group(2)
             business["Street"] = ", ".join(addr_parts[:-1])
@@ -6060,6 +6496,8 @@ def parse_touchafro(url, html):
         business["Phone"] = info["phone"]
     if info.get("website"):
         business["Website URL"] = info["website"]
+    if info.get("email"):
+        business["Business Email"] = info["email"]
 
     # ---- Description  ----
     desc_el = soup.select_one(".description")
@@ -6292,6 +6730,18 @@ def parse_localbizdirectory(url, html):
 
         if label == "Address":
             addr_text = clean(value_el.get_text())
+            if "," not in addr_text:
+                # Some listings (e.g. "Plano TX 75023") render a bare
+                # comma-free "City State Zip" string with no street segment
+                # at all. The comma-based logic below expects >=2 comma
+                # parts and would otherwise dump the whole string into
+                # Street, leaving City/State/Zipcode blank.
+                street, city, state, zipcode = _split_city_state_zip_address(addr_text)
+                business["Street"] = street
+                business["City"] = city
+                business["State"] = state
+                business["Zipcode"] = zipcode
+                continue
             parts = [clean(p) for p in addr_text.split(",") if clean(p)]
             if parts and parts[-1].upper() in ("USA", "US", "UNITED STATES"):
                 business["Country"] = "United States"
@@ -6445,23 +6895,32 @@ def parse_vetslist(url, html):
         if is_meaningful(phone_text):
             business["Phone"] = phone_text
 
-    # ---- Address  ----
-    addr_span = soup.select_one('span[itemprop="streetAddress"]')
-    if addr_span:
-        addr_text = clean(addr_span.get_text())
-        if is_meaningful(addr_text):
-            street, city, state, zipcode = _split_blinx_address(addr_text)
-            business["Street"] = street
-            business["City"] = city
-            business["State"] = state
-            business["Zipcode"] = zipcode
+    # ---- Address ----
+    # This site has no itemprop="streetAddress" at all -- addressLocality
+    # holds a combined "City ST" string (e.g. "Plano TX") and postalCode
+    # holds the zip separately, with the country as plain text right after
+    # a <br/> in the same block (e.g. "...75023<br/>United States of America").
+    addr_li = soup.select_one('[itemprop="address"][itemtype*="PostalAddress"]')
+    if addr_li:
+        locality_span = addr_li.select_one('span[itemprop="addressLocality"]')
+        if locality_span:
+            locality_text = clean(locality_span.get_text())
+            match = re.match(r"^(?P<city>[A-Za-z][A-Za-z .'-]*?)\s+(?P<state>[A-Z]{2})$", locality_text)
+            if match:
+                business["City"] = match.group("city")
+                business["State"] = match.group("state")
+            elif is_meaningful(locality_text):
+                business["City"] = locality_text
 
-    # ---- Country ----
-    intro_p = soup.select_one("p.line-height-xl.nomargin")
-    if intro_p:
-        intro_lines = clean_multiline(intro_p.get_text(separator="\n")).split("\n")
-        if len(intro_lines) >= 2:
-            country_text = intro_lines[-1]
+        postal_span = addr_li.select_one('span[itemprop="postalCode"]')
+        if postal_span:
+            postal_text = clean(postal_span.get_text())
+            if is_meaningful(postal_text):
+                business["Zipcode"] = postal_text
+
+        br = addr_li.find("br")
+        if br and br.next_sibling:
+            country_text = clean(str(br.next_sibling))
             if is_meaningful(country_text):
                 business["Country"] = country_text
 
@@ -6660,9 +7119,14 @@ def parse_wireanium(url, html):
     if h1:
         business["Business Name"] = clean(h1.get_text())
 
-    # ---- Address (split across individual <span> elements: street, city,
-    # state, zip, with a trailing plain-text country after the final
-    # <br>) ----
+    # ---- Address (split across individual <span> elements: normally
+    # street, city, state, zip -- but some listings have no street at all,
+    # rendering only city/state/zip as 3 spans. The old code only handled
+    # the 4-span case and fell back to dumping the ENTIRE container text
+    # (including the trailing country) into Street for anything else, e.g.
+    # Street="Plano, Texas, 75023United States" with City/State/Zipcode
+    # left blank -- so branch on the actual span count instead.
+    # A trailing plain-text country follows the final <br>. ----
     addr_container = soup.select_one(".overview-tab-the-member-address .col-sm-8")
     if addr_container:
         addr_spans = addr_container.find_all("span", recursive=False)
@@ -6671,6 +7135,10 @@ def parse_wireanium(url, html):
             business["City"] = clean(addr_spans[1].get_text())
             business["State"] = clean(addr_spans[2].get_text())
             business["Zipcode"] = clean(addr_spans[3].get_text())
+        elif len(addr_spans) == 3:
+            business["City"] = clean(addr_spans[0].get_text())
+            business["State"] = clean(addr_spans[1].get_text())
+            business["Zipcode"] = clean(addr_spans[2].get_text())
         elif not business["Street"]:
             addr_text = clean(addr_container.get_text())
             if is_meaningful(addr_text):
@@ -6801,6 +7269,16 @@ _LOCUUL_ADDRESS_RE = re.compile(
     r"(?P<state>[A-Za-z][A-Za-z .]*?)\s+(?P<zip>\d{5}(?:-\d{4})?)$"
 )
 
+# Matches "City State, Zip" -- the shorter shape used when a listing has no
+# separate street line at all (e.g. Neera Truong Real Estate: the location
+# row is just "Plano TX, 75023", two comma-separated segments instead of
+# three). _LOCUUL_ADDRESS_RE requires a street segment and never matches
+# this shape, which previously caused the whole raw string to fall through
+# into Street while City/State/Zipcode stayed blank.
+_LOCUUL_CITY_STATE_ZIP_RE = re.compile(
+    r"^(?P<city>.+?)\s+(?P<state>[A-Za-z]{2})\s*,\s*(?P<zip>\d{5}(?:-\d{4})?)$"
+)
+
 
 def parse_locuul(url, html):
 
@@ -6840,7 +7318,13 @@ def parse_locuul(url, html):
                     business["State"] = clean(match.group("state"))
                     business["Zipcode"] = match.group("zip")
                 else:
-                    business["Street"] = addr_text
+                    city_state_zip_match = _LOCUUL_CITY_STATE_ZIP_RE.match(addr_text)
+                    if city_state_zip_match:
+                        business["City"] = clean(city_state_zip_match.group("city"))
+                        business["State"] = clean(city_state_zip_match.group("state"))
+                        business["Zipcode"] = city_state_zip_match.group("zip")
+                    else:
+                        business["Street"] = addr_text
 
         trailing_text_nodes = [
             clean(node) for node in addr_container.contents
@@ -6986,11 +7470,25 @@ def _split_dbesearch_address(address_text):
     line 2 = "City, ST 12345"), e.g.:
         300 Triple Diamond Blvd
         Nokomis, FL 34275
+    Some listings have no street at all -- everything renders as a single
+    line reading just "City, ST 12345" (e.g. "Plano , TX 75023") -- so
+    that single line is checked against the city/state/zip pattern first
+    rather than being assumed to be a street.
     """
     street, city, state, zipcode = "", "", "", ""
 
     lines = [clean(line) for line in address_text.split("\n") if clean(line)]
     if not lines:
+        return street, city, state, zipcode
+
+    if len(lines) == 1:
+        match = _DBESEARCH_CITY_STATE_ZIP_RE.match(lines[0])
+        if match:
+            city = match.group("city").strip()
+            state = match.group("state").strip()
+            zipcode = match.group("zip").strip()
+        else:
+            street = lines[0]
         return street, city, state, zipcode
 
     street = lines[0]
@@ -7125,6 +7623,11 @@ def parse_qdexx(url, html):
         business["State"] = clean(address.get("addressRegion", ""))
         business["Zipcode"] = clean(str(address.get("postalCode", "")))
 
+        if main_ld.get("telephone"):
+            business["Phone"] = clean(main_ld["telephone"])
+        if main_ld.get("email"):
+            business["Business Email"] = clean(main_ld["email"])
+
     # ---- Name (DOM fallback) ----
     if not business["Business Name"]:
         h1 = soup.select_one(".tileOverlay h1")
@@ -7177,17 +7680,39 @@ def parse_qdexx(url, html):
                     business["Hours"] = "; ".join(lines)
             break
 
+    # ---- Phone / Email (DOM fallback -- "Contact" tile) ----
+    if not business["Phone"] or not business["Business Email"]:
+        for li in soup.select("li.tile.bp"):
+            h3 = li.find("h3")
+            if h3 and clean(h3.get_text()).lower() == "contact":
+                if not business["Phone"]:
+                    tel_link = li.select_one('a[href^="tel:"]')
+                    if tel_link:
+                        phone_text = clean(tel_link.get_text())
+                        # the visible text is "tel (214) 566-1908" -- strip the
+                        # leading "tel" label, falling back to the href itself
+                        phone_text = re.sub(r"^tel\s*", "", phone_text, flags=re.I).strip()
+                        business["Phone"] = phone_text or tel_link["href"].replace("tel:", "").strip()
+                if not business["Business Email"]:
+                    mail_link = li.select_one('a[href^="mailto:"]')
+                    if mail_link:
+                        email_text = clean(mail_link.get_text()) or mail_link["href"].replace("mailto:", "").strip()
+                        if is_meaningful(email_text):
+                            business["Business Email"] = email_text
+                break
+
     # ---- Phone (labeled fallback out of the About description -- this
     #      site provides no dedicated phone field/element for this listing) ----
     phone_source = business["Description"]
-    if not phone_source:
-        meta_desc = soup.find("meta", attrs={"name": "description"})
-        if meta_desc:
-            phone_source = meta_desc.get("content", "")
-    if phone_source:
-        phone_match = _QDEXX_PHONE_LABEL_RE.search(phone_source)
-        if phone_match:
-            business["Phone"] = clean(phone_match.group(1))
+    if not business["Phone"]:
+        if not phone_source:
+            meta_desc = soup.find("meta", attrs={"name": "description"})
+            if meta_desc:
+                phone_source = meta_desc.get("content", "")
+        if phone_source:
+            phone_match = _QDEXX_PHONE_LABEL_RE.search(phone_source)
+            if phone_match:
+                business["Phone"] = clean(phone_match.group(1))
 
     return business
 
@@ -7237,13 +7762,30 @@ _LETSKNOWIT_COUNTRY_SUFFIX_RE = re.compile(
     r",\s*(united states(?: of america)?|usa|us)\s*$", re.I
 )
 
+# Matches "City State Zip" with no internal comma at all (e.g. "Plano TX
+# 75023") -- the shape left behind once _LETSKNOWIT_COUNTRY_SUFFIX_RE strips
+# the trailing ", United States" from a street-less listing's address. This
+# has zero commas, so _split_blinx_address (comma-based only) dumps the
+# whole "City State" run into "state" and never populates "city".
+_LETSKNOWIT_CITY_STATE_ZIP_RE = re.compile(
+    r"^(?P<city>.+?)\s+(?P<state>[A-Za-z]{2})\s+(?P<zip>\d{5}(?:-\d{4})?)$"
+)
+
 
 def _letsknowit_split_address(address):
     """_split_blinx_address expects 'Street, City, State Zip' (3 parts),
     but letsknowit renders 'Street, City, State Zip, Country' (4 parts),
     which shifts city/state/zip off by one. Strip the trailing country
-    first so the shared splitter parses it correctly."""
+    first so the shared splitter parses it correctly.
+
+    Some listings have no street segment and no internal comma either --
+    just "City State Zip" once the country suffix is gone. Handle that
+    shape explicitly before falling back to the comma-based splitter."""
     address = _LETSKNOWIT_COUNTRY_SUFFIX_RE.sub("", address).strip()
+    if "," not in address:
+        match = _LETSKNOWIT_CITY_STATE_ZIP_RE.match(address)
+        if match:
+            return "", match.group("city").strip(), match.group("state").strip(), match.group("zip")
     return _split_blinx_address(address)
 
 
@@ -7406,7 +7948,7 @@ def parse_metriteweb(url, html):
     if addr_li and not addr_li.find("a"):
         addr_text = clean(addr_li.get_text())
         if addr_text:
-            street, city, state, zipcode = _split_blinx_address(addr_text)
+            street, city, state, zipcode = _split_address_allow_no_comma(addr_text)
             business["Street"] = street
             business["City"] = city
             business["State"] = state
@@ -7472,7 +8014,7 @@ def parse_closelocation(url, html):
         if addr_p:
             addr_text = clean(addr_p.get_text())
             if is_meaningful(addr_text):
-                street, city, state, zipcode = _split_blinx_address(addr_text)
+                street, city, state, zipcode = _split_address_allow_no_comma(addr_text)
                 business["Street"] = street
                 business["City"] = city
                 business["State"] = state
@@ -7576,14 +8118,669 @@ def parse_closelocation(url, html):
             business["Logo"] = urljoin(url, og_image["content"])
 
     # ---- Photos (banner's CSS background-image slider) ----
+    # When no photo has been uploaded for a listing, this template still
+    # emits a background-image url() -- but pointing at the bare uploads
+    # *directory* with no filename (e.g. ".../uploads/business/'), which
+    # renders as the flat gray placeholder box seen on this listing.
+    # Require an actual filename after the last "/" so that placeholder
+    # isn't mistaken for a real photo.
     for slider in soup.select(".slider_box"):
         style = slider.get("style", "")
         if "background-image" not in style:
             continue
         match = re.search(r"url\(['\"]?(.*?)['\"]?\)", style)
         if match and match.group(1):
-            business["Photos"] = [urljoin(url, match.group(1))]
+            photo_path = match.group(1).strip()
+            if photo_path and not photo_path.endswith("/"):
+                business["Photos"] = [urljoin(url, photo_path)]
         break
+
+    return business
+
+
+# ==========================================================
+# Site parser: searchmypro.com
+# ==========================================================
+
+_SEARCHMYPRO_ADDRESS_RE = re.compile(
+    r"^(?P<street>.+),\s*(?P<city>[^,]+),\s*"
+    r"(?P<state>[A-Za-z][A-Za-z .]*?)\s+(?P<zip>\d{5}(?:-\d{4})?)$"
+)
+
+
+def _searchmypro_jsonld_local_business(soup):
+    """Return the LocalBusiness object from the page's JSON-LD (handles
+    both a plain object/list and an @graph-wrapped block)."""
+    for script in soup.find_all("script", type="application/ld+json"):
+        if not script.string:
+            continue
+        try:
+            data = json.loads(script.string, strict=False)
+        except Exception:
+            continue
+
+        graph = data.get("@graph") if isinstance(data, dict) else None
+        objects = graph if isinstance(graph, list) else (
+            data if isinstance(data, list) else [data]
+        )
+
+        for obj in objects:
+            if isinstance(obj, dict) and obj.get("@type") == "LocalBusiness":
+                return obj
+
+    return None
+
+
+def parse_searchmypro(url, html):
+
+    soup = BeautifulSoup(html, "lxml")
+    business = empty_business()
+
+    # ---- Bot-wall guard ----
+    if _looks_blocked(html):
+        return business
+
+    ld_business = _searchmypro_jsonld_local_business(soup) or {}
+
+    # ---- Business Name ----
+    h1 = soup.select_one("h1.bold.inline-block")
+    if h1:
+        business["Business Name"] = clean(h1.get_text())
+
+    if not business["Business Name"]:
+        company = soup.select_one(".table-display-company .textbox-company")
+        if company:
+            business["Business Name"] = clean(company.get_text())
+
+    if not business["Business Name"] and ld_business.get("name"):
+        business["Business Name"] = clean(ld_business["name"])
+
+    # ---- Phone ----
+    tel = soup.select_one('a[href^="tel:"]')
+    if tel and tel.get("href"):
+        business["Phone"] = tel["href"].replace("tel:", "").strip()
+
+    if not business["Phone"] and ld_business.get("telephone"):
+        business["Phone"] = clean(ld_business["telephone"])
+
+    # ---- Website URL ----
+    weblink = soup.select_one("a.weblink[href]")
+    if weblink:
+        business["Website URL"] = weblink["href"]
+
+    # ---- Description (multi-paragraph About section) ----
+    about = soup.select_one(".froala-data.field-about_me")
+    if about:
+        desc_text = clean_multiline(about.get_text(separator="\n"))
+        if is_meaningful(desc_text):
+            business["Description"] = desc_text
+
+    if not business["Description"] and ld_business.get("description"):
+        desc_text = clean(ld_business["description"])
+        if is_meaningful(desc_text):
+            business["Description"] = desc_text
+
+    # ---- Address ----
+    # Two markup shapes seen on this template:
+    #  (a) one <span> holding the full "Street, City, State Zip" string
+    #      (e.g. the Focal listing)
+    #  (b) four separate <span> elements -- street, city, state, zip --
+    #      with a trailing plain-text country after the final <br>
+    #      (e.g. the WrightWay Emergency Services listing)
+    addr_container = soup.select_one(".overview-tab-the-member-address .col-sm-8")
+    if addr_container:
+        addr_spans = addr_container.find_all("span", recursive=False)
+
+        if len(addr_spans) >= 4:
+            business["Street"] = clean(addr_spans[0].get_text())
+            business["City"] = clean(addr_spans[1].get_text())
+            business["State"] = clean(addr_spans[2].get_text())
+            business["Zipcode"] = clean(addr_spans[3].get_text())
+        elif len(addr_spans) == 1:
+            addr_text = clean(addr_spans[0].get_text())
+            match = _SEARCHMYPRO_ADDRESS_RE.match(addr_text) if addr_text else None
+            if match:
+                business["Street"] = clean(match.group("street"))
+                business["City"] = clean(match.group("city"))
+                business["State"] = clean(match.group("state"))
+                business["Zipcode"] = match.group("zip")
+            elif addr_text:
+                # Fall back to storing the raw string as Street rather than
+                # dropping the address entirely if it doesn't match the
+                # expected "Street, City, State Zip" shape.
+                business["Street"] = addr_text
+        else:
+            # Unexpected span count -- fall back to the raw container text
+            # rather than dropping the address entirely.
+            addr_text = clean(addr_container.get_text())
+            if is_meaningful(addr_text):
+                business["Street"] = addr_text
+
+        # Country: trailing plain-text node directly under the container
+        # (after the final <br>), not inside any of the address spans.
+        trailing_text_nodes = [
+            clean(node) for node in addr_container.contents
+            if isinstance(node, NavigableString) and clean(node) and clean(node) != ","
+        ]
+        if trailing_text_nodes:
+            country_text = trailing_text_nodes[-1]
+            if country_text:
+                business["Country"] = country_text
+
+    # ---- Country fallback (JSON-LD) ----
+    if not business["Country"]:
+        addr_obj = ld_business.get("address")
+        if isinstance(addr_obj, dict):
+            country = clean(addr_obj.get("addressCountry", ""))
+            if country and country.upper() != "N/A":
+                business["Country"] = country
+
+    # ---- Hours (not every listing publishes one) ----
+    hours_el = soup.select_one(".table-display-hours")
+    if hours_el:
+        hours_text = clean(hours_el.get_text())
+        if is_meaningful(hours_text):
+            business["Hours"] = hours_text
+
+    # ---- Category ----
+    category_span = soup.select_one(".profile-header-top-category")
+    if category_span:
+        cat_text = clean(category_span.get_text())
+        if is_meaningful(cat_text):
+            business["Category"] = cat_text
+
+    if not business["Category"]:
+        crumbs = [clean(li.get_text()) for li in soup.select("ol.breadcrumb li")]
+        crumbs = [c for c in crumbs if c and c.lower() != "home"]
+        if len(crumbs) >= 2:
+            business["Category"] = crumbs[-2]
+
+    # ---- Social Media Links (dedicated widget row first, then JSON-LD
+    #      sameAs as a fallback -- excluding the business's own website
+    #      and this directory's own domain) ----
+    for a in soup.select(".table-display-social_media_links a[href]"):
+        href = a.get("href", "")
+        for domain, network in SOCIAL_DOMAINS.items():
+            if _hostname_matches_social_domain(href, domain):
+                business["Social Media Links"][network] = href
+                break
+
+    if not business["Social Media Links"]:
+        same_as = ld_business.get("sameAs")
+        same_as = same_as if isinstance(same_as, list) else ([same_as] if same_as else [])
+        for href in same_as:
+            if not isinstance(href, str) or not href.startswith("http"):
+                continue
+            if "searchmypro.com" in href.lower():
+                continue
+            for domain, network in SOCIAL_DOMAINS.items():
+                if _hostname_matches_social_domain(href, domain):
+                    business["Social Media Links"][network] = href
+                    break
+
+    # ---- Logo ----
+    logo_img = soup.select_one(".profile-image img[src]")
+    if logo_img:
+        business["Logo"] = urljoin(url, logo_img["src"])
+
+    if not business["Logo"] and ld_business.get("image"):
+        image = ld_business["image"]
+        image_url = image.get("url") if isinstance(image, dict) else image
+        if image_url:
+            business["Logo"] = urljoin(url, image_url)
+
+    return business
+
+
+# ==========================================================
+# Site parser: trustburn.com
+# ==========================================================
+
+def parse_trustburn(url, html):
+
+    soup = BeautifulSoup(html, "lxml")
+    business = empty_business()
+
+    # ---- Bot-wall guard ----
+    if _looks_blocked(html):
+        return business
+
+    # ---- Business Name ----
+    name_el = soup.select_one(".tb-company-header__name")
+    if name_el:
+        name_text = clean(name_el.get_text())
+        if is_meaningful(name_text):
+            business["Business Name"] = name_text
+
+    # ---- About card: Description / Website / Phone / Address ----
+    # Field labels live in <dt> with their values in the sibling <dd>
+    # (Website/Phone are links, Address is plain "Street, City, State Zip"
+    # text) -- reuse _split_blinx_address for the combined address line.
+    about_card = soup.select_one(".company-about")
+    if about_card:
+        lead = about_card.select_one(".company-about__lead")
+        if lead:
+            desc_text = clean(lead.get_text())
+            if is_meaningful(desc_text):
+                business["Description"] = desc_text
+
+        for row in about_card.select(".company-about__row"):
+            dt = row.find("dt")
+            dd = row.find("dd")
+            if not dt or not dd:
+                continue
+            label = clean(dt.get_text()).lower()
+
+            if "website" in label:
+                link = dd.find("a", href=True)
+                if link:
+                    business["Website URL"] = urljoin(url, link["href"].strip())
+                else:
+                    text = clean(dd.get_text())
+                    if is_meaningful(text):
+                        business["Website URL"] = text
+            elif "phone" in label:
+                link = dd.find("a", href=True)
+                phone_text = clean(link.get_text()) if link else clean(dd.get_text())
+                if is_meaningful(phone_text):
+                    business["Phone"] = phone_text
+            elif "address" in label:
+                addr_text = clean(dd.get_text())
+                if is_meaningful(addr_text):
+                    street, city, state, zipcode = _split_blinx_address(addr_text)
+                    business["Street"] = street
+                    business["City"] = city
+                    business["State"] = state
+                    business["Zipcode"] = zipcode
+
+    # ---- Logo ----
+    logo_img = soup.select_one(".tb-company-header__photo img[src]")
+    if logo_img and logo_img.get("src"):
+        business["Logo"] = urljoin(url, logo_img["src"])
+
+    if not business["Logo"]:
+        og_image = soup.find("meta", property="og:image")
+        if og_image and og_image.get("content"):
+            business["Logo"] = urljoin(url, og_image["content"])
+
+    return business
+
+
+# ==========================================================
+# Site parser: yourbizlistings.com
+# ==========================================================
+
+_YOURBIZLISTINGS_ADDRESS_RE = re.compile(
+    r"^(?P<street>.+),\s*(?P<city>[^,]+),\s*(?P<state>[^,]+),\s*"
+    r"(?P<zip>\d{5}(?:-\d{4})?),\s*(?P<country>.+)$"
+)
+
+
+def _split_yourbizlistings_address(text):
+    """Splits the "Street, City, State, Zip, Country" line used in both
+    the header and the Location/Contacts widget. Falls back to a plain
+    positional comma-split if the trailing zip/country don't match the
+    expected shape (some listings omit zip or country)."""
+    match = _YOURBIZLISTINGS_ADDRESS_RE.match(text)
+    if match:
+        return (
+            clean(match.group("street")),
+            clean(match.group("city")),
+            clean(match.group("state")),
+            match.group("zip"),
+            clean(match.group("country")),
+        )
+
+    parts = [clean(p) for p in text.split(",") if clean(p)]
+    street = parts[0] if len(parts) > 0 else ""
+    city = parts[1] if len(parts) > 1 else ""
+    state = parts[2] if len(parts) > 2 else ""
+    zipcode = parts[3] if len(parts) > 3 else ""
+    country = parts[4] if len(parts) > 4 else ""
+    return street, city, state, zipcode, country
+
+
+def _yourbizlistings_jsonld_local_business(soup):
+    """Return the LocalBusiness object from the page's JSON-LD @graph
+    block (it's nested under a WebPage's mainEntity, not top-level)."""
+    for script in soup.find_all("script", type="application/ld+json"):
+        if not script.string:
+            continue
+        try:
+            data = json.loads(script.string, strict=False)
+        except Exception:
+            continue
+
+        graph = data.get("@graph") if isinstance(data, dict) else None
+        objects = graph if isinstance(graph, list) else (
+            data if isinstance(data, list) else [data]
+        )
+
+        for obj in objects:
+            if not isinstance(obj, dict):
+                continue
+            if obj.get("@type") == "LocalBusiness":
+                return obj
+            main_entity = obj.get("mainEntity")
+            if isinstance(main_entity, dict) and main_entity.get("@type") == "LocalBusiness":
+                return main_entity
+
+    return None
+
+
+def parse_yourbizlistings(url, html):
+
+    soup = BeautifulSoup(html, "lxml")
+    business = empty_business()
+
+    # ---- Bot-wall guard ----
+    if _looks_blocked(html):
+        return business
+
+    ld_business = _yourbizlistings_jsonld_local_business(soup) or {}
+
+    # ---- Business Name ----
+    h1 = soup.select_one("h1.listing-title")
+    if h1:
+        business["Business Name"] = clean(h1.get_text())
+
+    if not business["Business Name"] and ld_business.get("name"):
+        business["Business Name"] = clean(ld_business["name"])
+
+    # ---- Street / City / State / Zipcode / Country / Phone / Website URL
+    #      (Location / Contacts widget -- labels live in a <span>, values
+    #      in the sibling <a>) ----
+    for li in soup.select(".location-contact-section li"):
+        label_el = li.find("span")
+        label = clean(label_el.get_text()).lower() if label_el else ""
+        value_el = li.find("a")
+        value_text = clean(value_el.get_text()) if value_el else ""
+
+        if "address" in label:
+            if is_meaningful(value_text):
+                (business["Street"], business["City"], business["State"],
+                 business["Zipcode"], business["Country"]) = _split_yourbizlistings_address(value_text)
+        elif label.startswith("phone"):
+            if is_meaningful(value_text):
+                business["Phone"] = value_text
+        elif label.startswith("website"):
+            if value_el and value_el.get("href"):
+                business["Website URL"] = value_el["href"].strip()
+            elif is_meaningful(value_text):
+                business["Website URL"] = value_text
+
+    # ---- Address fallback (JSON-LD) ----
+    if not business["Street"]:
+        addr_obj = ld_business.get("address")
+        if isinstance(addr_obj, dict):
+            business["Street"] = clean(addr_obj.get("streetAddress", ""))
+            business["City"] = clean(addr_obj.get("addressLocality", ""))
+            business["State"] = clean(addr_obj.get("addressRegion", ""))
+            business["Zipcode"] = clean(addr_obj.get("postalCode", ""))
+            business["Country"] = clean(addr_obj.get("addressCountry", ""))
+
+    # ---- Phone fallback ----
+    if not business["Phone"] and ld_business.get("telephone"):
+        business["Phone"] = clean(ld_business["telephone"])
+
+    # ---- Website URL fallback ----
+    if not business["Website URL"] and ld_business.get("url"):
+        business["Website URL"] = clean(ld_business["url"])
+
+    # ---- Business Email (Cloudflare-obfuscated on this template) ----
+    cf_email = _find_cf_email(soup)
+    if cf_email:
+        business["Business Email"] = cf_email
+    elif ld_business.get("email"):
+        business["Business Email"] = clean(ld_business["email"])
+
+    # ---- Description ----
+    for title_el in soup.select(".list-single-main-item-title h3"):
+        if clean(title_el.get_text()).lower() != "description":
+            continue
+        item = title_el.find_parent(class_="list-single-main-item")
+        if not item:
+            continue
+        p = item.select_one(".list-single-main-item_content p")
+        if p:
+            desc_text = clean(p.get_text())
+            if is_meaningful(desc_text):
+                business["Description"] = desc_text
+        break
+
+    if not business["Description"] and ld_business.get("description"):
+        desc_text = clean(ld_business["description"])
+        if is_meaningful(desc_text):
+            business["Description"] = desc_text
+
+    # ---- Hours (rendered twice -- desktop + mobile widgets -- so
+    #      de-dupe after collecting) ----
+    hours_lines = []
+    for day_el in soup.select(".opening-hours-day"):
+        li = day_el.find_parent("li")
+        if not li:
+            continue
+        time_el = li.select_one(".opening-hours-time")
+        if not time_el:
+            continue
+        day = clean(day_el.get_text())
+        time_text = clean(time_el.get_text())
+        if day and time_text:
+            line = f"{day}: {time_text}"
+            if line not in hours_lines:
+                hours_lines.append(line)
+    if hours_lines:
+        business["Hours"] = "\n".join(hours_lines)
+
+    # ---- Category ----
+    category_span = soup.select_one(".listing-item-category-wrap span.text-start")
+    if category_span:
+        cat_text = clean(category_span.get_text())
+        if is_meaningful(cat_text):
+            business["Category"] = cat_text
+
+    if not business["Category"]:
+        cat_link = soup.select_one(".list-single-tags a")
+        if cat_link:
+            cat_text = clean(cat_link.get_text())
+            if is_meaningful(cat_text):
+                business["Category"] = cat_text
+
+    # ---- Logo ----
+    # Listings without an uploaded photo render a text-initials avatar
+    # (div.location-logo) instead of an <img>, and og:image/JSON-LD
+    # "image" both point at the directory's own generic placeholder
+    # logo rather than the business's -- so only a real <img> inside
+    # the banner counts as a Logo here.
+    logo_img = soup.select_one(".banner-logo-wrapper img[src]")
+    if logo_img and logo_img.get("src"):
+        business["Logo"] = urljoin(url, logo_img["src"])
+
+    return business
+
+
+# ==========================================================
+# Site parser: bulkpostads.com
+# ==========================================================
+
+def _bulkpostads_jsonld_local_business(soup):
+    """Return the LocalBusiness object from the page's JSON-LD. On this
+    template it's its own top-level script (not wrapped in @graph), but
+    handle both shapes since other listings could vary."""
+    for script in soup.find_all("script", type="application/ld+json"):
+        if not script.string:
+            continue
+        try:
+            data = json.loads(script.string, strict=False)
+        except Exception:
+            continue
+
+        graph = data.get("@graph") if isinstance(data, dict) else None
+        objects = graph if isinstance(graph, list) else (
+            data if isinstance(data, list) else [data]
+        )
+
+        for obj in objects:
+            if isinstance(obj, dict) and obj.get("@type") == "LocalBusiness":
+                return obj
+
+    return None
+
+
+def _bulkpostads_deobfuscated_email(a_tag):
+    """The email link's visible text is split across text nodes with
+    empty HTML comments injected between them as an anti-scraper
+    obfuscation (e.g. "info<!---->@<!---->wrightway.com"). Comments
+    carry no text of their own, but the surrounding whitespace does --
+    so strip each text node individually and join with no separator,
+    rather than calling get_text(), which would leave stray spaces
+    around the "@"."""
+    if not a_tag:
+        return ""
+    parts = []
+    for node in a_tag.find_all(string=True):
+        if isinstance(node, Comment):
+            continue
+        text = node.strip()
+        if text:
+            parts.append(text)
+    return "".join(parts)
+
+
+def parse_bulkpostads(url, html):
+
+    soup = BeautifulSoup(html, "lxml")
+    business = empty_business()
+
+    # ---- Bot-wall guard ----
+    if _looks_blocked(html):
+        return business
+
+    ld_business = _bulkpostads_jsonld_local_business(soup) or {}
+
+    # ---- Business Name ----
+    if ld_business.get("name"):
+        business["Business Name"] = clean(ld_business["name"])
+
+    if not business["Business Name"]:
+        h1 = soup.select_one("h1.page-header-title")
+        if h1:
+            # Title is "<Name> in <City>, <State>, <Country>" -- keep
+            # only the part before " in ".
+            title_text = clean(h1.get_text())
+            business["Business Name"] = title_text.split(" in ")[0].strip()
+
+    # ---- Street / City / State / Zipcode / Country (JSON-LD address) ----
+    addr_obj = ld_business.get("address")
+    if isinstance(addr_obj, dict):
+        street_raw = clean(addr_obj.get("streetAddress", ""))
+        # This template's streetAddress sometimes has ",City State"
+        # appended onto the actual street (a bug in their own JSON-LD) --
+        # keep only the part before the first comma.
+        business["Street"] = street_raw.split(",")[0].strip()
+        business["City"] = clean(addr_obj.get("addressLocality", ""))
+        business["State"] = clean(addr_obj.get("addressRegion", ""))
+        business["Zipcode"] = clean(addr_obj.get("postalCode", ""))
+        business["Country"] = clean(addr_obj.get("addressCountry", ""))
+
+    # ---- Address fallback (sidebar widget) ----
+    if not business["Street"]:
+        street_el = soup.select_one(".geodir-field-address [itemprop='streetAddress']")
+        if street_el:
+            business["Street"] = clean(street_el.get_text()).split(",")[0].strip()
+
+    if not business["Zipcode"]:
+        zip_el = soup.select_one(".geodir-field-address [itemprop='postalCode']")
+        if zip_el:
+            business["Zipcode"] = clean(zip_el.get_text())
+
+    # ---- Zipcode fallback: regex out of the raw address blob ----
+    # This template doesn't always give postalCode its own field/element --
+    # sometimes it's just tacked onto the end of the streetAddress string
+    # (e.g. "131 Continental Dr, Suite 305, Newark, Delaware 19713"), so
+    # postalCode in the JSON-LD is blank AND there's no itemprop='postalCode'
+    # element to select above. Pull it out of whichever raw address string
+    # we have with a regex as a last resort.
+    if not business["Zipcode"]:
+        addr_blob = ""
+        if isinstance(addr_obj, dict):
+            addr_blob = addr_obj.get("streetAddress", "")
+        if not addr_blob:
+            street_el = soup.select_one(".geodir-field-address [itemprop='streetAddress']")
+            if street_el:
+                addr_blob = street_el.get_text()
+        zip_match = re.search(r"\b(\d{5})(?:-\d{4})?\b", addr_blob)
+        if zip_match:
+            business["Zipcode"] = zip_match.group(0)
+
+    # ---- Phone ----
+    tel = soup.select_one(".geodir-field-phone a[href^='tel:']")
+    if tel:
+        phone_text = clean(tel.get_text())
+        if is_meaningful(phone_text):
+            business["Phone"] = phone_text
+
+    if not business["Phone"] and ld_business.get("telephone"):
+        business["Phone"] = clean(ld_business["telephone"])
+
+    # ---- Website URL ----
+    website_link = soup.select_one(".geodir-field-website a[href]")
+    if website_link:
+        business["Website URL"] = website_link["href"].strip()
+
+    # ---- Business Email (de-obfuscated mailto link) ----
+    email_link = soup.select_one(".geodir-field-email a")
+    email_text = _bulkpostads_deobfuscated_email(email_link)
+    if is_meaningful(email_text):
+        business["Business Email"] = email_text
+
+    # ---- Description ----
+    if ld_business.get("description"):
+        desc_text = clean(ld_business["description"])
+        if is_meaningful(desc_text):
+            business["Description"] = desc_text
+
+    if not business["Description"]:
+        content_p = soup.select_one(".geodir-field-post_content p")
+        if content_p:
+            desc_text = clean(content_p.get_text())
+            if is_meaningful(desc_text):
+                business["Description"] = desc_text
+
+    # ---- Category ----
+    category_link = soup.select_one(".geodir_post_meta.geodir-field-post_category a")
+    if category_link:
+        cat_text = clean(category_link.get_text())
+        if is_meaningful(cat_text):
+            business["Category"] = cat_text
+
+    # ---- Keywords (Place Tags) ----
+    tag_links = soup.select(".geodir_post_meta.geodir-field-post_tags a")
+    if tag_links:
+        tags = [clean(a.get_text()) for a in tag_links]
+        tags = [t for t in tags if is_meaningful(t)]
+        if tags:
+            business["Keywords"] = ", ".join(tags)
+
+    # ---- Logo (featured image) ----
+    og_image = soup.find("meta", property="og:image")
+    if og_image and og_image.get("content"):
+        business["Logo"] = urljoin(url, og_image["content"])
+
+    if not business["Logo"] and ld_business.get("image"):
+        image = ld_business["image"]
+        image_url = image.get("url") if isinstance(image, dict) else image
+        if image_url:
+            business["Logo"] = urljoin(url, image_url)
+
+    # ---- Photos (gallery tab) ----
+    photos = []
+    for a in soup.select(".geodir-images-gallery a.aui-lightbox-image[href]"):
+        photo_url = urljoin(url, a["href"].strip())
+        if photo_url not in photos:
+            photos.append(photo_url)
+    if photos:
+        business["Photos"] = photos
 
     return business
 
@@ -7649,6 +8846,10 @@ SITE_PARSERS = {
     "vymaps.com": ("requests", parse_vymaps),
     "wireanium.com": ("requests", parse_wireanium),
     "closelocation.com": ("requests", parse_closelocation),
+    "trustburn.com": ("requests", parse_trustburn),
+    "searchmypro.com": ("requests", parse_searchmypro),
+    "yourbizlistings.com": ("requests", parse_yourbizlistings),
+    "bulkpostads.com": ("requests", parse_bulkpostads),
 }
 
 
