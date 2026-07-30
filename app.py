@@ -245,7 +245,11 @@ elif run_disabled:
 if st.session_state.get("results"):
     st.markdown("---")
     st.markdown("**Previous results still available:**")
-    excel_bytes = write_excel(st.session_state.results)
+    excel_bytes = write_excel(
+        st.session_state.results,
+        st.session_state.get("extracted_data", []),
+        st.session_state.user_data,
+    )
     col1, col2 = st.columns([2, 1])
     with col1:
         st.download_button(
