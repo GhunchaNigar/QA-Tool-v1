@@ -342,10 +342,10 @@ def _match_hours(u: str, e: str) -> bool:
     Hours: extract time-like tokens (digits, am/pm, day names) and compare.
     Match if ≥50% of user time tokens found in extracted hours.
 
-    NOTE: compare_row() no longer routes Hours through this matcher — Hours
-    is now a presence-only check (like Logo/Photos), since most sources
-    don't even collect an Hours value from the user to compare against.
-    Kept here in case value-level Hours comparison is wanted again later.
+    NOTE: values_match() no longer routes Hours through this matcher —
+    Hours is now an exact match on the normalized value (`u == e`), same
+    as the fallback case. Kept here in case fuzzy value-level Hours
+    comparison is wanted again later.
     """
     _time_token = re.compile(
         r"\b(\d{1,2}(?::\d{2})?(?:am|pm)?|mon|tue|wed|thu|fri|sat|sun|"
@@ -465,7 +465,7 @@ def values_match(user_val: str, extracted_val: str, field: str) -> bool:
         return _match_description(u, e)
 
     if "hour" in fl:
-        return _match_hours(user_val, extracted_val)  # raw values preserve time tokens
+        return u == e  # exact match on normalized value
 
     if "social" in fl:
         return _match_social(user_val, extracted_val)
