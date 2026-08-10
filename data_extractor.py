@@ -31,7 +31,7 @@ can be dropped into pages/analysis.py with minimal changes.
 """
 
 import concurrent.futures
-from extractor import extract_business
+from business_extractor import extract_business
 from fields_config import SOURCE_FIELDS, detect_source
 
 
