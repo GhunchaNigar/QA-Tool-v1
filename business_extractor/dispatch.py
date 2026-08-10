@@ -111,7 +111,7 @@ SITE_PARSERS = {
     "perrysplacepromotions.org": ("requests", parsers.perrysplacepromotions.parse_perrysplacepromotions),
     "provenemployer.com": ("requests", parsers.provenemployer.parse_provenemployer),
     "biztobiz.org": ("requests", parsers.biztobiz.parse_biztobiz),
-    "bizmaker.org": ("requests", parsers.bizmaker.parse_bizmaker),
+    "bizmaker.org": ("playwright", parsers.bizmaker.parse_bizmaker),
 }
 
 
