@@ -325,6 +325,117 @@ SOURCE_FIELDS = {
         "Phone", "Website URL", "Keywords", "Description", "Hours",
         "Business Email", "Category", "Logo", "Photos",
     ],
+    "meetyourmarkets.com": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Description", "Hours",
+        "Social Media Links", "GBP Link", "Category", "Logo",
+    ],
+    "bizcoupon.directory": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Description", "Hours", "Category", "Logo",
+    ],
+    "bulkadspost.com": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Keywords", "Description", "Hours",
+        "Business Email", "Category", "Logo",
+    ],
+    "countrypwr.com": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Description", "Hours", "Category", "Logo",
+    ],
+    "bizmakersamerica.org": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Description", "Hours", "Category", "Logo",
+    ],
+    "cake.me": [
+        "Name", "Owner Name", "Street", "City", "State", "Zipcode",
+        "Phone", "Website URL", "Keywords", "Description",
+        "Business Email", "Logo",
+    ],
+    "homify.com": [
+        "Name", "Street", "City", "State", "Zipcode",
+        "Phone", "Website URL", "Keywords", "Description",
+        "Social Media Links", "Category", "Logo",
+    ],
+    "americasmallbiz.com": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Description", "Hours",
+        "Social Media Links", "Category", "Logo",
+    ],
+    "bizforgeusa.com": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Description", "Hours",
+        "Social Media Links", "Category", "Logo",
+    ],
+    "bigbizstuff.com": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Description", "Hours",
+        "Social Media Links", "Category", "Logo",
+    ],
+    "biz411.org": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Description","Hours", "Category", "Logo",
+    ],
+    "bizbangboom.com": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Description", "Hours",
+        "Social Media Links", "Category", "Logo",
+    ],
+    "bizbuildboom.com":[
+         "Name", "Street", "City", "State" , "Zipcode" , "Country",
+          "Phone ",   "Website URL", "Description", "Hours", 
+          "Social Media Links", " Category", "Logo",
+    ],
+    "bizlinkbuilder.com":[
+         "Name", "Street", "City", "State" , "Zipcode" , "Country",
+          "Phone ",   "Website URL", "Description", "Hours", 
+          "Social Media Links", " Category", "Logo",
+    ],
+    "blogbangboom.com":[
+         "Name", "Street", "City", "State" , "Zipcode" , "Country",
+          "Phone ",   "Website URL", "Description", "Hours", 
+          "Social Media Links", " Category", "Logo",
+    ],
+    "homepros411.com":[
+         "Name", "Street", "City", "State" , "Zipcode" , "Country",
+          "Phone ",   "Website URL", "Description", "Hours", 
+          "Social Media Links", " Category", "Logo",
+    ],
+    "selfemployedai.com": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Description", "Hours",
+        "Social Media Links", "Category", "Logo",
+    ],
+    "smallbizamerica.org": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Description", "Hours",
+        "Social Media Links", "Category", "Logo",
+    ],
+    "smallbizblog.net": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Description", "Hours","Category", "Logo",
+    ],
+    "perrysplacepromotions.org": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Description", "Hours",
+        "Social Media Links", "GBP Link", "Category", "Logo",
+    ],
+    "provenemployer.com": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Keywords", "Description", "Hours",
+        "Social Media Links", "Business Email", "Category", "Logo", "Photos",
+    ],
+    "biztobiz.org": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Description", "Hours",
+        "Social Media Links", "Category", "Logo",
+    ],
+    "bizmaker.org": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Description", "Hours",
+        "Social Media Links", "Category", "Logo",
+    ],
+
 }
 
 VISUAL_FIELDS = {"Logo", "Photos"}
