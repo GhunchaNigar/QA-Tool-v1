@@ -342,8 +342,25 @@ async def _attempt(context, url, timeout, patient):
     try:
         response = None
         if not patient:
+            # Deliberately short budget for the networkidle attempt --
+            # this branch exists to be the FAST path, but reusing the
+            # full per-attempt `timeout` here meant a page whose network
+            # never goes idle (ads/analytics/websockets that keep
+            # polling -- confirmed on cybo.com and supplyautonomy.com)
+            # would burn the entire `timeout` on this call, THEN burn a
+            # second full `timeout` on the domcontentloaded fallback
+            # below: up to 2x`timeout` just for attempt 1's navigation,
+            # before _wait_for_data/_extract_and_expand even run. That
+            # blew straight through common.py's subprocess.run() outer
+            # timeout ((timeout_ms/1000)+30s) with the worker killed
+            # mid-flight and no JSON ever printed -- exactly the bare
+            # "Command [...] timed out after 75.0 seconds" failures with
+            # no attempt1/attempt2 debug notes at all. Capping this at a
+            # small fixed budget means a hung networkidle wait fails
+            # fast into the fallback instead of doubling the wait.
+            fast_networkidle_timeout = min(timeout, 12000)
             try:
-                response = await page.goto(url, timeout=timeout, wait_until="networkidle")
+                response = await page.goto(url, timeout=fast_networkidle_timeout, wait_until="networkidle")
             except Exception:
                 response = await page.goto(url, timeout=timeout, wait_until="domcontentloaded")
             # Give client-side-hydrated content (e.g. blinx.biz's
