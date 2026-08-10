@@ -32,6 +32,17 @@ BLOCK_SIGNALS = [
     "ddos-guard", "checking your browser", "verify you are human",
     "enable cookies to continue", "please enable cookies",
     "security check", "access to this page has been denied",
+    # Cloudflare's actual JS-challenge interstitial title/body text.
+    # Confirmed on bizmaker.org: the page title is literally
+    # "Just a moment..." and none of the phrases above matched it, so
+    # this 28KB challenge shell (Turnstile widget script, no real
+    # listing content) was sailing through _is_blocked() as "not
+    # blocked" and getting handed straight to the site parser, which
+    # correctly found nothing (0/18 fields) because there was nothing
+    # real there to find.
+    "just a moment",
+    "checking if the site connection is secure",
+    "review the security of your connection",
 ]
 
 # ── Rate-limit signals ───────────────────────────────────────────────
@@ -186,6 +197,14 @@ _CHROME_DOMAINS = (
     r"|linkedin\.com|youtube\.com|tiktok\.com|pinterest\.com"
     r"|google\.com|googletagmanager\.com|googleapis\.com|gstatic\.com"
     r"|doubleclick\.net|wa\.me|whatsapp\.com"
+    # cloudflare.com: Cloudflare's own "Just a moment..." challenge
+    # page footer links to cloudflare.com ("Performance & security by
+    # Cloudflare"). That single boilerplate link was enough to satisfy
+    # _has_real_data() below and mark a completely empty challenge
+    # page as "not thin" -- letting it through as a successful scrape
+    # with zero real content. Same class of bug as the manta.com case
+    # documented above, just a different chrome domain.
+    r"|cloudflare\.com|cloudflareinsights\.com|challenges\.cloudflare\.com"
 )
 
 _DATA_PRESENT_RE = re.compile(
