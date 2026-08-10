@@ -171,6 +171,18 @@ def extract_business(url, worker_path="playwright_worker.py"):
     else:
         html = fetch_via_playwright(url, worker_path=worker_path)
 
+        # ---- DEBUG: the "requests" branch above has always had this
+        # visibility; the "playwright" branch never did. Without it we
+        # can't tell whether Playwright got the real page, an empty JS
+        # shell, or a bot-check/interstitial page for domains routed
+        # straight to playwright (like bizmaker.org).
+        print(
+            f"[DEBUG extract_business:playwright] url={url} matched={matched} "
+            f"html_len={len(html) if html else 0} "
+            f"snippet={(html or '')[:500]!r}",
+            flush=True,
+        )
+
     if _looks_like_cloudflare_error(html):
         raise RuntimeError(
             f"Fetch for {url} returned a Cloudflare error page "
