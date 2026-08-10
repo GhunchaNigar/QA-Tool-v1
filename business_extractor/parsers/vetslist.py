@@ -28,10 +28,16 @@ def parse_vetslist(url, html):
             business["Phone"] = phone_text
 
     # ---- Address ----
-    # This site has no itemprop="streetAddress" at all -- addressLocality
-    # holds a combined "City ST" string (e.g. "Plano TX") and postalCode
-    # holds the zip separately, with the country as plain text right after
-    # a <br/> in the same block (e.g. "...75023<br/>United States of America").
+    # VetsList listings vary in markup: some have no itemprop="streetAddress"
+    # at all -- addressLocality holds a combined "City ST" string (e.g.
+    # "Plano TX") and postalCode holds the zip separately, with the country
+    # as plain text right after a <br/> in the same block (e.g.
+    # "...75023<br/>United States of America"). Others (e.g. WrightWay
+    # Emergency Services) instead put the *entire* address -- street, city,
+    # state, and zip -- into a single itemprop="streetAddress" span (e.g.
+    # "300 Triple Diamond Blvd ,Nokomis, FL 34275") with nothing else in the
+    # block, so neither the addressLocality nor postalCode selector matched
+    # and every address field was silently left blank. Handle both shapes.
     addr_li = soup.select_one('[itemprop="address"][itemtype*="PostalAddress"]')
     if addr_li:
         locality_span = addr_li.select_one('span[itemprop="addressLocality"]')
@@ -49,6 +55,21 @@ def parse_vetslist(url, html):
             postal_text = clean(postal_span.get_text())
             if is_meaningful(postal_text):
                 business["Zipcode"] = postal_text
+
+        if not locality_span and not postal_span:
+            street_span = addr_li.select_one('span[itemprop="streetAddress"]')
+            if street_span:
+                addr_text = clean(street_span.get_text())
+                if is_meaningful(addr_text):
+                    street, city, state, zipcode = _split_blinx_address(addr_text)
+                    if is_meaningful(street):
+                        business["Street"] = street
+                    if is_meaningful(city):
+                        business["City"] = city
+                    if is_meaningful(state):
+                        business["State"] = state
+                    if is_meaningful(zipcode):
+                        business["Zipcode"] = zipcode
 
         br = addr_li.find("br")
         if br and br.next_sibling:
@@ -107,5 +128,3 @@ def parse_vetslist(url, html):
         business["GBP Link"] = directions["href"]
 
     return business
-
-
