@@ -152,10 +152,17 @@ def extract_business(url, worker_path="playwright_worker.py"):
         # site is quietly serving different content to the cloud IP than
         # it serves to BLOCK_SIGNALS-style bot walls -- switch this
         # domain's method to "playwright" in SITE_PARSERS above.
+        #
+        # flush=True: Streamlit Cloud's stdout is not attached to a real
+        # terminal, so Python block-buffers print() output by default.
+        # Without flush=True these lines can sit in an unflushed buffer
+        # indefinitely (never appearing in Manage app -> Logs) even
+        # though this code path definitely ran.
         print(
             f"[DEBUG extract_business] url={url} matched={matched} "
             f"blocked={blocked} html_len={len(html) if html else 0} "
-            f"snippet={(html or '')[:300]!r}"
+            f"snippet={(html or '')[:300]!r}",
+            flush=True,
         )
 
         if blocked:
@@ -177,8 +184,17 @@ def extract_business(url, worker_path="playwright_worker.py"):
     # got HTML. If html_len above looked healthy (a real page) but every
     # value here is still empty, the bug is in parsers/<site>.py's
     # selectors, not in fetching -- share that parser file next.
+    #
+    # flush=True: same buffering reason as the print above -- this line
+    # also runs for "playwright"-routed domains (like bizmaker.org),
+    # which never hit the print above, so it's the only debug signal
+    # for those. It needs to actually reach the log viewer.
     non_empty = sum(1 for v in business.values() if v not in ("", {}, []))
-    print(f"[DEBUG extract_business] url={url} parser={parser.__name__} non_empty_fields={non_empty}/{len(business)}")
+    print(
+        f"[DEBUG extract_business] url={url} parser={parser.__name__} "
+        f"non_empty_fields={non_empty}/{len(business)}",
+        flush=True,
+    )
 
     if isinstance(business, list):
         return [filter_business_fields(record, url) for record in business]
