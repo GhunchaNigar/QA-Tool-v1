@@ -144,6 +144,20 @@ def extract_business(url, worker_path="playwright_worker.py"):
             html = None
             blocked = True
 
+        # ---- DEBUG: confirm what the "requests" fetch actually got back.
+        # Check this line in your Streamlit Cloud logs (Manage app -> Logs)
+        # after re-running a URL that's coming back empty. If html_len is
+        # small or the snippet doesn't look like the real page (JS shell,
+        # "just a moment", redirect, etc.) even though blocked=False, the
+        # site is quietly serving different content to the cloud IP than
+        # it serves to BLOCK_SIGNALS-style bot walls -- switch this
+        # domain's method to "playwright" in SITE_PARSERS above.
+        print(
+            f"[DEBUG extract_business] url={url} matched={matched} "
+            f"blocked={blocked} html_len={len(html) if html else 0} "
+            f"snippet={(html or '')[:300]!r}"
+        )
+
         if blocked:
             # Unmapped/blocked site -- retry via Playwright automatically
             html = fetch_via_playwright(url, worker_path=worker_path)
@@ -158,6 +172,13 @@ def extract_business(url, worker_path="playwright_worker.py"):
         )
 
     business = parser(url, html)
+
+    # ---- DEBUG: confirm whether the parser found anything at all once it
+    # got HTML. If html_len above looked healthy (a real page) but every
+    # value here is still empty, the bug is in parsers/<site>.py's
+    # selectors, not in fetching -- share that parser file next.
+    non_empty = sum(1 for v in business.values() if v not in ("", {}, []))
+    print(f"[DEBUG extract_business] url={url} parser={parser.__name__} non_empty_fields={non_empty}/{len(business)}")
 
     if isinstance(business, list):
         return [filter_business_fields(record, url) for record in business]
