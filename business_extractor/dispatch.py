@@ -51,7 +51,6 @@ SITE_PARSERS = {
     "touchafro.com": ("requests", parsers.touchafro.parse_touchafro),
     "supplyautonomy.com": ("requests", parsers.supplyautonomy.parse_supplyautonomy),
     "mybusinessplaces.com": ("requests", parsers.mybusinessplaces.parse_mybusinessplaces),
-    "local-biz.directory": ("requests", parsers.local_biz.parse_localbizdirectory),
     "vetslist.com": ("requests", parsers.vetslist.parse_vetslist),
     "vymaps.com": ("requests", parsers.vymaps.parse_vymaps),
     "wireanium.com": ("requests", parsers.wireanium.parse_wireanium),
