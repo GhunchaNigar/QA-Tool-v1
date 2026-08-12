@@ -3,6 +3,7 @@ Site parser: blinx.biz
 """
 
 from ..common import *  # noqa: F401,F403 -- see business_extractor/common.py
+from urllib.parse import unquote
 
 
 
@@ -144,8 +145,20 @@ _BLINX_RENDERED_ADDRESS_RE = re.compile(
     r"^(?P<street>.+?),\s*(?P<city>[^,]+?),\s*(?P<state>[A-Za-z]{2,})\s*,?\s*(?P<zip>\d{5}(?:-\d{4})?)$"
 )
 
+# Some blinx.biz listings render only "Street, Zip" on the visible address
+# line -- no city or state segment at all (e.g. "1883 N Silverspring Dr,
+# 54913"). _BLINX_RENDERED_ADDRESS_RE requires a city+state between street
+# and zip, so it never matches this shorter shape and the address falls
+# through to the JSON record's (incomplete) "address" field instead. Try
+# this narrower pattern too.
+_BLINX_STREET_ZIP_RE = re.compile(
+    r"^(?P<street>.+?),\s*(?P<zip>\d{5}(?:-\d{4})?)$"
+)
+
 
 def _extract_blinx_address_from_dom(soup):
+
+    street_zip_fallback = None
 
     for raw_line in soup.get_text(separator="\n").split("\n"):
         line = clean(raw_line)
@@ -159,6 +172,48 @@ def _extract_blinx_address_from_dom(soup):
                 match.group("state").strip(),
                 match.group("zip").strip(),
             )
+        if not street_zip_fallback:
+            sz_match = _BLINX_STREET_ZIP_RE.match(line)
+            if sz_match:
+                street_zip_fallback = (
+                    sz_match.group("street").strip(),
+                    "",
+                    "",
+                    sz_match.group("zip").strip(),
+                )
+
+    return street_zip_fallback
+
+
+def _extract_blinx_city_state_from_maps_link(soup):
+    """
+    When the visible address line omits city/state (see
+    _BLINX_STREET_ZIP_RE above), blinx.biz still embeds them in the
+    Google Maps iframe/link's "q=" query param, e.g.:
+      .../maps/embed/v1/search?...&q=1883 N Silverspring Dr, Appleton ,WI, US
+    Parse that param as "Street, City, State[, Country]" (or "City, State
+    [, Country]" without a street) to recover City/State/Country.
+    """
+    for tag in soup.find_all(["a", "iframe"], href=True) + soup.find_all("iframe", src=True):
+        href = tag.get("href") or tag.get("src") or ""
+        if "maps/embed" not in href and "google.com/maps" not in href.lower():
+            continue
+
+        q = None
+        parsed = urlparse(href)
+        qs = parse_qs(parsed.query)
+        if qs.get("q"):
+            q = qs["q"][0]
+        if not q:
+            continue
+
+        parts = [p.strip() for p in unquote(q).split(",") if p.strip()]
+        if len(parts) >= 4:
+            return parts[1], parts[2], parts[3]  # city, state, country
+        if len(parts) == 3:
+            return parts[0], parts[1], parts[2]  # city, state, country
+        if len(parts) == 2:
+            return parts[0], parts[1], ""         # city, state
 
     return None
 
@@ -258,6 +313,17 @@ def parse_blinx(url, html):
         business["State"] = state
         business["Zipcode"] = zipcode
 
+        # The visible address line sometimes has no city/state at all
+        # (just "Street, Zip") -- recover those from the Maps embed link.
+        if not city and not state:
+            maps_location = _extract_blinx_city_state_from_maps_link(soup)
+            if maps_location:
+                map_city, map_state, map_country = maps_location
+                business["City"] = map_city
+                business["State"] = map_state
+                if map_country and not business["Country"]:
+                    business["Country"] = map_country
+
     # ---- Business Name fallback (og:title / <title>) ----
     if not business["Business Name"]:
         og_title = soup.find("meta", property="og:title")
@@ -302,5 +368,3 @@ def parse_blinx(url, html):
             business["Website URL"] = href
 
     return business
-
-
