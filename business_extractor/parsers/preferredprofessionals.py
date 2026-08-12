@@ -1,13 +1,10 @@
 """
 Site parser: preferredprofessionals.com
 """
-
 from ..common import *  # noqa: F401,F403 -- see business_extractor/common.py
 
 
-
 def parse_preferredprofessionals(url, html):
-
     soup = BeautifulSoup(html, "lxml")
     business = empty_business()
 
@@ -65,11 +62,15 @@ def parse_preferredprofessionals(url, html):
 
     # ---- Phone + Website URL + Description (label/value paragraph pairs
     # inside "span.textarea.textarea-about_me" -- this skin's equivalent
-    # of cleansway's "div.froala-data.field-about_me") ----
+    # of cleansway's "div.froala-data.field-about_me")
+    #
+    # NOTE: this skin labels the site link "URL:" (not "Website:"), so the
+    # website regex must accept both -- otherwise the label paragraph and
+    # its following <a> paragraph both fall through into the description
+    # and "Website URL" is left blank. ----
     about_el = soup.select_one("span.textarea-about_me")
     if about_el:
         para_tags = [p for p in about_el.find_all("p") if clean(p.get_text())]
-
         desc_paragraphs = []
         i = 0
         while i < len(para_tags):
@@ -78,7 +79,7 @@ def parse_preferredprofessionals(url, html):
                 business["Phone"] = clean(para_tags[i + 1].get_text())
                 i += 2
                 continue
-            if re.match(r"^website:?$", line, flags=re.I) and i + 1 < len(para_tags):
+            if re.match(r"^(website|url):?$", line, flags=re.I) and i + 1 < len(para_tags):
                 link = para_tags[i + 1].find("a", href=True)
                 business["Website URL"] = link["href"] if link else clean(para_tags[i + 1].get_text())
                 i += 2
@@ -88,7 +89,6 @@ def parse_preferredprofessionals(url, html):
                 continue
             desc_paragraphs.append(line)
             i += 1
-
         if desc_paragraphs:
             business["Description"] = "\n".join(desc_paragraphs)
 
@@ -102,5 +102,3 @@ def parse_preferredprofessionals(url, html):
             business["Logo"] = urljoin(url, og_image["content"])
 
     return business
-
-
