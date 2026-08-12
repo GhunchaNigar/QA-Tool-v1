@@ -25,7 +25,6 @@ from . import iformative
 from . import letsknowit
 from . import linkcentre
 from . import listings_globalbusinessdirectory
-from . import local_biz
 from . import locuul
 from . import meetyourmarkets
 from . import merchantcircle
