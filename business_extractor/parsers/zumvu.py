@@ -42,11 +42,30 @@ def parse_zumvu(url, html):
 
         addr = entity.get("address", {})
         if isinstance(addr, dict):
-            business["Street"] = addr.get("streetAddress", business["Street"])
-            business["City"] = addr.get("addressLocality", business["City"])
-            business["State"] = addr.get("addressRegion", business["State"])
-            business["Zipcode"] = addr.get("postalCode", business["Zipcode"])
-            business["Country"] = addr.get("addressCountry", business["Country"])
+            street = addr.get("streetAddress", "")
+            city = addr.get("addressLocality", "")
+            state = addr.get("addressRegion", "")
+            zipcode = addr.get("postalCode", "")
+            country = addr.get("addressCountry", "")
+
+            # Zumvu's JSON-LD template sometimes dumps the *entire*
+            # address ("131 Continental Dr, Suite 305, Newark,
+            # Delaware 19713") into streetAddress alone, leaving
+            # addressLocality/addressRegion/postalCode blank. Detect
+            # that and split streetAddress ourselves instead of
+            # letting the whole blob land in Street.
+            if street and not (city and state and zipcode):
+                split_street, split_city, split_state, split_zip = _split_blinx_address(street)
+                street = split_street
+                city = city or split_city
+                state = state or split_state
+                zipcode = zipcode or split_zip
+
+            business["Street"] = street or business["Street"]
+            business["City"] = city or business["City"]
+            business["State"] = state or business["State"]
+            business["Zipcode"] = zipcode or business["Zipcode"]
+            business["Country"] = country or business["Country"]
 
         knows_about = entity.get("knowsAbout")
         if knows_about and isinstance(knows_about, list):
@@ -165,6 +184,3 @@ def parse_zumvu(url, html):
                 business["Social Media Links"][network] = href
 
     return business
-
-
-
