@@ -28,32 +28,64 @@ def parse_vetslist(url, html):
             business["Phone"] = phone_text
 
     # ---- Address ----
-    # VetsList listings vary in markup: some have no itemprop="streetAddress"
-    # at all -- addressLocality holds a combined "City ST" string (e.g.
-    # "Plano TX") and postalCode holds the zip separately, with the country
-    # as plain text right after a <br/> in the same block (e.g.
-    # "...75023<br/>United States of America"). Others (e.g. WrightWay
-    # Emergency Services) instead put the *entire* address -- street, city,
-    # state, and zip -- into a single itemprop="streetAddress" span (e.g.
-    # "300 Triple Diamond Blvd ,Nokomis, FL 34275") with nothing else in the
-    # block, so neither the addressLocality nor postalCode selector matched
-    # and every address field was silently left blank. Handle both shapes.
+    # VetsList listings vary in markup:
+    #   1) Some have no itemprop="streetAddress" at all -- addressLocality
+    #      holds just "City ST" (e.g. "Plano TX") and postalCode holds the
+    #      zip separately, with the country as plain text right after a
+    #      <br/> in the same block (e.g. "...75023<br/>United States of
+    #      America").
+    #   2) Others (e.g. WrightWay Emergency Services) instead put the
+    #      *entire* address -- street, city, state, and zip -- into a
+    #      single itemprop="streetAddress" span (e.g. "300 Triple Diamond
+    #      Blvd ,Nokomis, FL 34275") with nothing else in the block.
+    #   3) Others still (e.g. Valley Exteriors) put the *entire* address
+    #      into the itemprop="addressLocality" span itself (e.g.
+    #      "1883 N Silverspring Dr, Appleton, WI 54913"), with no separate
+    #      streetAddress or postalCode span at all. The old "City ST"
+    #      regex didn't match this longer string, so it silently fell back
+    #      to dumping the whole string into City and left Street/State/Zip
+    #      blank. Detect and split this full-address shape explicitly.
     addr_li = soup.select_one('[itemprop="address"][itemtype*="PostalAddress"]')
     if addr_li:
         locality_span = addr_li.select_one('span[itemprop="addressLocality"]')
         if locality_span:
             locality_text = clean(locality_span.get_text())
-            match = re.match(r"^(?P<city>[A-Za-z][A-Za-z .'-]*?)\s+(?P<state>[A-Z]{2})$", locality_text)
-            if match:
-                business["City"] = match.group("city")
-                business["State"] = match.group("state")
+
+            # Shape 3: "Street, City, ST Zip" all inside addressLocality.
+            full_match = re.match(
+                r"^(?P<street>.+?),\s*(?P<city>[A-Za-z][A-Za-z .'-]*?),\s*"
+                r"(?P<state>[A-Z]{2})\s+(?P<zip>\d{5}(?:-\d{4})?)$",
+                locality_text,
+            )
+            # Shape 1: just "City ST".
+            simple_match = re.match(
+                r"^(?P<city>[A-Za-z][A-Za-z .'-]*?)\s+(?P<state>[A-Z]{2})$",
+                locality_text,
+            )
+
+            if full_match:
+                street = clean(full_match.group("street"))
+                city = clean(full_match.group("city"))
+                state = clean(full_match.group("state"))
+                zipcode = clean(full_match.group("zip"))
+                if is_meaningful(street):
+                    business["Street"] = street
+                if is_meaningful(city):
+                    business["City"] = city
+                if is_meaningful(state):
+                    business["State"] = state
+                if is_meaningful(zipcode):
+                    business["Zipcode"] = zipcode
+            elif simple_match:
+                business["City"] = simple_match.group("city")
+                business["State"] = simple_match.group("state")
             elif is_meaningful(locality_text):
                 business["City"] = locality_text
 
         postal_span = addr_li.select_one('span[itemprop="postalCode"]')
         if postal_span:
             postal_text = clean(postal_span.get_text())
-            if is_meaningful(postal_text):
+            if is_meaningful(postal_text) and not business["Zipcode"]:
                 business["Zipcode"] = postal_text
 
         if not locality_span and not postal_span:
