@@ -12,23 +12,9 @@ ALL_FIELDS = [
 ]
 
 SOURCE_FIELDS = {
-    "bpublic.com": [
-        "Name", "Street", "City", "State", "Zipcode", "Country",
-        "Phone", "Website URL", "Description", "Hours", "Category", "Logo",
-    ],
     "smallbusinessusa.com":[
         "Name",	"Street",	"City",	"State", "Zipcode", "Country",
         "Phone", "Website URL", "Category", 
-    ],
-    "zeemaps.com": [
-        "Name", "Street", "City", "State", "Zipcode",
-        "Phone", "Website URL", "Description", "Business Email",
-        "Logo",
-    ],
-    "callupcontact.com": [
-        "Name", "Street", "City", "State", "Zipcode", "Country",
-        "Phone", "Website URL", "Keywords", "Description",
-        "Hours", "Business Email",
     ],
     "zumvu.com": [
         "Name", "Street", "City", "State", "Zipcode", "Country",
@@ -70,12 +56,6 @@ SOURCE_FIELDS = {
         "Social Media Links",
         "Category",
     ],
-    "webforcompany.com": [
-        "Name", "Owner Name", "Street", "City", "State", "Zipcode",
-        "Phone", "Website URL", "Keywords", "Description",
-        "Hours", "Social Media Links", "GBP Link",
-        "Business Email", "Logo",
-    ],
     "provenexpert.com": [
         "Name", "Owner Name", "Street", "City", "State", "Zipcode", "Country",
     "Phone", "Website URL", "Keywords", "Description",
@@ -86,12 +66,6 @@ SOURCE_FIELDS = {
         "Name", "Street", "City", "State", "Zipcode", "Country",
         "Phone", "Website URL", "Keywords", "Description",
         "Hours", "Social Media Links", "GBP Link", "Business Email",
-        "Category", "Logo",
-    ],
-    "cataloxy.us": [
-        "Name", "Street", "City", "State", "Zipcode", "Country",
-        "Phone", "Website URL", "Keywords", "Description",
-        "Social Media Links", "Business Email",
         "Category", "Logo",
     ],
     
@@ -139,11 +113,6 @@ SOURCE_FIELDS = {
         "Name", "Street", "City", "State", "Zipcode", "Country",
         "Phone", "Website URL", "Description", "Business Email",
         "Category", "Logo",
-    ],
-    "cybo.com": [
-        "Name", "Street", "City", "State", "Zipcode", "Country",
-        "Phone", "Website URL", "Description", "Hours",
-        "Social Media Links", "GBP Link", "Category", "Logo",
     ],
     "linkcentre.com": [
         "Name", "Street", "City", "State", "Zipcode", "Country",
@@ -201,18 +170,9 @@ SOURCE_FIELDS = {
         "Name", "Street", "City", "State", "Zipcode", "Country",
         "Phone", "Website URL", "Description", "Category", "Logo",
     ],
-    "findabusinesspro.com": [
-        "Name", "Street", "City", "State", "Zipcode", "Country",
-        "Phone", "Website URL", "Description", "Category", "Logo",
-    ],
     "globeconnected.com": [
         "Name", "Street", "City", "State", "Zipcode", "Country",
         "Website URL", "Description", "Category", "Logo",
-    ],
-    "whatsyourhours.com": [
-        "Name", "Street", "City", "State", "Zipcode", "Country",
-        "Phone", "Website URL", "Description", "Hours",
-        "Social Media Links", "GBP Link", "Business Email", "Category", "Logo",
     ],
     "milestones.business": [
         "Name", "Street", "City", "State", "Zipcode", "Country",
@@ -343,10 +303,6 @@ SOURCE_FIELDS = {
         "Name", "Street", "City", "State", "Zipcode", "Country",
         "Phone", "Website URL", "Description", "Hours", "Category", "Logo",
     ],
-    "bizmakersamerica.org": [
-        "Name", "Street", "City", "State", "Zipcode", "Country",
-        "Phone", "Website URL", "Description", "Hours", "Category", "Logo",
-    ],
     "cake.me": [
         "Name", "Owner Name", "Street", "City", "State", "Zipcode",
         "Phone", "Website URL", "Keywords", "Description",
@@ -357,63 +313,15 @@ SOURCE_FIELDS = {
         "Phone", "Website URL", "Keywords", "Description",
         "Social Media Links", "Category", "Logo",
     ],
-    "americasmallbiz.com": [
-        "Name", "Street", "City", "State", "Zipcode", "Country",
-        "Phone", "Website URL", "Description", "Hours",
-        "Social Media Links", "Category", "Logo",
-    ],
-    "bizforgeusa.com": [
-        "Name", "Street", "City", "State", "Zipcode", "Country",
-        "Phone", "Website URL", "Description", "Hours",
-        "Social Media Links", "Category", "Logo",
-    ],
     "bigbizstuff.com": [
         "Name", "Street", "City", "State", "Zipcode", "Country",
         "Phone", "Website URL", "Description", "Hours",
         "Social Media Links", "Category", "Logo",
     ],
-    "biz411.org": [
-        "Name", "Street", "City", "State", "Zipcode", "Country",
-        "Phone", "Website URL", "Description","Hours", "Category", "Logo",
-    ],
-    "bizbangboom.com": [
-        "Name", "Street", "City", "State", "Zipcode", "Country",
-        "Phone", "Website URL", "Description", "Hours",
-        "Social Media Links", "Category", "Logo",
-    ],
-    "bizbuildboom.com":[
-         "Name", "Street", "City", "State" , "Zipcode" , "Country",
-          "Phone ",   "Website URL", "Description", "Hours", 
-          "Social Media Links", " Category", "Logo",
-    ],
-    "bizlinkbuilder.com":[
-         "Name", "Street", "City", "State" , "Zipcode" , "Country",
-          "Phone ",   "Website URL", "Description", "Hours", 
-          "Social Media Links", " Category", "Logo",
-    ],
-    "blogbangboom.com":[
-         "Name", "Street", "City", "State" , "Zipcode" , "Country",
-          "Phone ",   "Website URL", "Description", "Hours", 
-          "Social Media Links", " Category", "Logo",
-    ],
     "homepros411.com":[
          "Name", "Street", "City", "State" , "Zipcode" , "Country",
           "Phone ",   "Website URL", "Description", "Hours", 
           "Social Media Links", " Category", "Logo",
-    ],
-    "selfemployedai.com": [
-        "Name", "Street", "City", "State", "Zipcode", "Country",
-        "Phone", "Website URL", "Description", "Hours",
-        "Social Media Links", "Category", "Logo",
-    ],
-    "smallbizamerica.org": [
-        "Name", "Street", "City", "State", "Zipcode", "Country",
-        "Phone", "Website URL", "Description", "Hours",
-        "Social Media Links", "Category", "Logo",
-    ],
-    "smallbizblog.net": [
-        "Name", "Street", "City", "State", "Zipcode", "Country",
-        "Phone", "Website URL", "Description", "Hours","Category", "Logo",
     ],
     "perrysplacepromotions.org": [
         "Name", "Street", "City", "State", "Zipcode", "Country",
@@ -425,16 +333,7 @@ SOURCE_FIELDS = {
         "Phone", "Website URL", "Keywords", "Description", "Hours",
         "Social Media Links", "Business Email", "Category", "Logo", "Photos",
     ],
-    "biztobiz.org": [
-        "Name", "Street", "City", "State", "Zipcode", "Country",
-        "Phone", "Website URL", "Description", "Hours",
-        "Social Media Links", "Category", "Logo",
-    ],
-    "bizmaker.org": [
-        "Name", "Street", "City", "State", "Zipcode", "Country",
-        "Phone", "Website URL", "Description", "Hours",
-        "Social Media Links", "Category", "Logo",
-    ],
+    
 
 }
 
