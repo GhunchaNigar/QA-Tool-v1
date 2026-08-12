@@ -520,50 +520,18 @@ def compare_row(
                 has_error = True
             continue
 
-        # Hours, GBP Link, Social Media Links: if the user typed an expected
-        # value, compare it against what was extracted (CORRECT/INCORRECT),
-        # same as any other field. If the user left it blank, fall back to
-        # a presence-only check — most sources don't collect a ground-truth
-        # value for these, so user_val is blank far more often than not,
-        # and the only meaningful question then is whether extraction found
-        # *anything* on the page.
-        #
-        # This must run BEFORE the generic "user left this field blank"
-        # check below, since that check would otherwise short-circuit a
-        # blank user_val straight to N/A — even on a source where the field
-        # is genuinely tracked per fields_config.SOURCE_FIELDS and the page
-        # genuinely has nothing there (e.g. freelistingusa.com has no
-        # Hours), which should be flagged MISSING rather than skipped.
-        #
-        # Social Media Links' extracted_val is a dict (network -> url),
-        # e.g. {} or {"Facebook": "..."}, not a string — `not extracted_val`
-        # correctly treats None, "", and {} all as empty without needing a
-        # separate str()-based check for that field.
-        if field in ("Hours", "GBP Link", "Social Media Links"):
-            extracted_blank = not extracted_val or (
-                isinstance(extracted_val, str)
-                and extracted_val.strip() in ("", "null", "None")
-            )
-            if extracted_blank:
-                row_result[field] = "MISSING"
-                has_error = True
-            elif not user_val:
-                # No expected value typed in — presence-only fallback.
-                row_result[field] = "CORRECT"
-            elif values_match(user_val, str(extracted_val), field):
-                row_result[field] = "CORRECT"
-            else:
-                row_result[field] = "INCORRECT"
-                has_error = True
-            continue
-
         # User left this field blank → skip
         if not user_val:
             row_result[field] = "N/A"
             continue
 
-        # AI returned null / empty
-        if extracted_val is None or str(extracted_val).strip() in ("", "null", "None"):
+        # AI returned null / empty (covers None, "", "null", "None", and
+        # empty containers like {} or [] — e.g. Social Media Links, whose
+        # extracted value is a dict rather than a string).
+        if not extracted_val or (
+            isinstance(extracted_val, str)
+            and extracted_val.strip() in ("null", "None")
+        ):
             row_result[field] = "MISSING"
             has_error = True
             continue
