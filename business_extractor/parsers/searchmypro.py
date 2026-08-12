@@ -106,7 +106,7 @@ def parse_searchmypro(url, html):
             business["Description"] = desc_text
 
     # ---- Address ----
-    # Three markup shapes seen on this template:
+    # Markup shapes seen on this template:
     #  (a) one <span> holding the full "Street, City, State Zip" string
     #      (e.g. the Focal listing)
     #  (b) four separate <span> elements -- street, city, state, zip --
@@ -114,12 +114,27 @@ def parse_searchmypro(url, html):
     #      (e.g. the WrightWay Emergency Services listing)
     #  (c) one <span> holding "Street, City, State Zip[, Full State Name]"
     #      followed by a <br> and then the country as a second line inside
-    #      the SAME span (e.g. the Valley Exteriors listing). Using
-    #      span.get_text() here would glue the state name and country
-    #      together with no separator at all ("WisconsinUnited States"),
-    #      since get_text() inserts nothing across a <br>. Split on <br>
-    #      first instead, so the address line and the country line stay
-    #      separate.
+    #      the SAME span (e.g. some listings). Using span.get_text() here
+    #      would glue the state name and country together with no
+    #      separator at all ("WisconsinUnited States"), since get_text()
+    #      inserts nothing across a <br>. Split on <br> first instead, so
+    #      the address line and the country line stay separate.
+    #  (d) two direct <span> children -- the first holding the full
+    #      "Street, City, State Zip" string, the second holding a
+    #      redundant full state name (e.g. "Wisconsin") -- followed by a
+    #      <br> and then the country as a plain-text sibling node (not
+    #      inside either span). Example markup:
+    #        <span>1883 N Silverspring Dr, Appleton, WI 54913</span>,
+    #        <span>Wisconsin</span><br>United States
+    #      This previously fell through to the "unexpected span count"
+    #      else-branch, which called addr_container.get_text() and glued
+    #      the state name and country together the same way shape (c)'s
+    #      naive text-join would, producing something like
+    #      "...54913, WisconsinUnited States" with nothing split out into
+    #      Street/City/State/Zip. Parse span 1 directly instead, and
+    #      ignore span 2 (it's a duplicate of the state already captured
+    #      from span 1). The country is picked up separately by the
+    #      trailing-text-node fallback further below.
     addr_container = soup.select_one(".overview-tab-the-member-address .col-sm-8")
     if addr_container:
         addr_spans = addr_container.find_all("span", recursive=False)
@@ -129,6 +144,21 @@ def parse_searchmypro(url, html):
             business["City"] = clean(addr_spans[1].get_text())
             business["State"] = clean(addr_spans[2].get_text())
             business["Zipcode"] = clean(addr_spans[3].get_text())
+        elif len(addr_spans) == 2:
+            # Shape (d): span 1 = "Street, City, State Zip", span 2 =
+            # redundant full state name -- ignore it.
+            addr_text = clean(addr_spans[0].get_text())
+            match = _match_searchmypro_address(addr_text) if addr_text else None
+            if match:
+                business["Street"] = clean(match.group("street"))
+                business["City"] = clean(match.group("city"))
+                business["State"] = clean(match.group("state"))
+                business["Zipcode"] = match.group("zip")
+            elif addr_text:
+                # Fall back to storing the raw string as Street rather than
+                # dropping the address entirely if it doesn't match the
+                # expected "Street, City, State Zip" shape.
+                business["Street"] = addr_text
         elif len(addr_spans) == 1:
             span = addr_spans[0]
             span_lines = clean_multiline(span.decode_contents()).split("\n")
