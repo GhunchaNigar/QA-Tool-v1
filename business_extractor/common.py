@@ -31,6 +31,8 @@ __all__ = [
     'IGNORE_CERT_ERRORS_DOMAINS',
     '_FINDUSHERE_EXCLUDED_LINK_DOMAINS',
     '_domain_needs_cert_bypass',
+    'SLOW_FETCH_TIMEOUTS_MS',
+    '_timeout_ms_for_domain',
     'SOCIAL_DOMAINS',
     '_hostname_matches_social_domain',
     'BLOCK_SIGNALS',
@@ -90,6 +92,18 @@ _FINDUSHERE_EXCLUDED_LINK_DOMAINS = (
     "whatsapp.com", "wa.me", "telegram.me", "t.me", "google.com",
     "ezoic.net",
 )
+
+# Domains known to be slow to fully load in Playwright (heavy JS,
+# slow origin servers, etc.) and that routinely blow past the default
+# 45s render budget -- e.g. supplyautonomy.com's business profile
+# pages were timing out at the default and surfacing a raw
+# "Command [...] timed out after 75.0 seconds" subprocess error
+# instead of a clean fetch. Give these domains a longer budget instead
+# of raising the default for every site.
+SLOW_FETCH_TIMEOUTS_MS = {
+    "supplyautonomy.com": 90000,
+}
+
 
 def _split_address_allow_no_comma(address):
     """Like _split_blinx_address, but first checks for the no-street,
@@ -266,6 +280,27 @@ def _domain_needs_cert_bypass(url):
     return any(domain == d or domain.endswith("." + d) for d in IGNORE_CERT_ERRORS_DOMAINS)
 
 
+def _timeout_ms_for_domain(url, requested_timeout_ms):
+    """Look up a per-domain minimum render timeout for slow sites
+    (see SLOW_FETCH_TIMEOUTS_MS) and return whichever is larger: the
+    caller's requested timeout, or the domain's known-slow override.
+    Callers that explicitly ask for a longer timeout than the override
+    are never shortened."""
+    domain = urlparse(url).netloc.lower().split(":")[0]
+    if domain.startswith("www."):
+        domain = domain[4:]
+
+    override_ms = None
+    for slow_domain, ms in SLOW_FETCH_TIMEOUTS_MS.items():
+        if domain == slow_domain or domain.endswith("." + slow_domain):
+            override_ms = ms
+            break
+
+    if override_ms is None:
+        return requested_timeout_ms
+    return max(requested_timeout_ms, override_ms)
+
+
 SOCIAL_DOMAINS = {
     "facebook": "Facebook",
     "instagram": "Instagram",
@@ -416,6 +451,13 @@ def fetch_via_requests(url):
 
 
 def fetch_via_playwright(url, worker_path="playwright_worker.py", timeout_ms=45000):
+    # Slow sites (see SLOW_FETCH_TIMEOUTS_MS) get a longer render
+    # budget than the default -- e.g. supplyautonomy.com's profile
+    # pages were blowing past the default 45s and hitting the
+    # subprocess-level timeout below before Playwright even had a
+    # chance to time out cleanly on its own.
+    timeout_ms = _timeout_ms_for_domain(url, timeout_ms)
+
     ignore_https_errors = _domain_needs_cert_bypass(url)
     proc = subprocess.run(
         [sys.executable, worker_path, url, str(timeout_ms), str(int(ignore_https_errors))],
