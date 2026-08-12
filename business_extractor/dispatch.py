@@ -1,25 +1,8 @@
-"""
-Domain -> parser dispatch table and the extract_business() entry point.
-
-This is the only place that needs to change when a new site parser is
-added: import the new parsers.<module> and add one line to SITE_PARSERS.
-"""
-
 from urllib.parse import urlparse
-
 import requests
-
 from . import parsers
 from .common import fetch_via_requests, fetch_via_playwright, filter_business_fields
 from .common import _looks_blocked, _looks_like_cloudflare_error
-
-# NOTE (carried over from the old single-file extractor.py): parse_generic
-# is referenced below for unmatched domains but is not defined anywhere in
-# this codebase. That was already the case before this split -- it will
-# raise a NameError if extract_business() is ever called on a URL that
-# doesn't match any entry in SITE_PARSERS. Add a real parse_generic (e.g.
-# in parsers/generic.py) or remove that fallback branch.
-
 
 SITE_PARSERS = {
     "letsknowit.com": ("requests", parsers.letsknowit.parse_letsknowit),
@@ -29,8 +12,6 @@ SITE_PARSERS = {
     "locuul.com": ("requests", parsers.locuul.parse_locuul),
     "bpublic.com": ("requests", parsers.bpublic.parse_bpublic),
     "smallbusinessusa.com": ("playwright", parsers.smallbusinessusa.parse_smallbusinessusa),
-    "zeemaps.com": ("api", parsers.zeemaps.parse_zeemaps),
-    "callupcontact.com": ("requests", parsers.callupcontact.parse_callupcontact),
     "zumvu.com": ("playwright", parsers.zumvu.parse_zumvu),
     "blinx.biz": ("playwright", parsers.blinx_biz.parse_blinx),
     "place123.net": ("requests", parsers.place123.parse_place123),
@@ -38,10 +19,8 @@ SITE_PARSERS = {
     "askmap.net": ("requests", parsers.askmap.parse_askmap),
     "earthmom.org": ("requests", parsers.earthmom.parse_earthmom),
     "gravitysplash.com": ("requests", parsers.gravitysplash.parse_gravitysplash),
-    "webforcompany.com": ("requests", parsers.webforcompany.parse_webforcompany),
     "provenexpert.com": ("requests", parsers.provenexpert.parse_provenexpert),
     "zipleaf.us": ("requests", parsers.zipleaf.parse_zipleaf),
-    "cataloxy.us": ("requests", parsers.cataloxy.parse_cataloxy),
     "fyple.com": ("requests", parsers.fyple.parse_fyple),
     "merchantcircle.com": ("requests", parsers.merchantcircle.parse_merchantcircle),
     "globalbusinessdirectory.us": ("requests", parsers.globalbusinessdirectory.parse_globalbusinessdirectory),
@@ -93,25 +72,14 @@ SITE_PARSERS = {
     "bulkadspost.com": ("requests", parsers.bulkpostads.parse_bulkpostads),
     "bizcoupon.directory": ("requests", parsers.bizcoupon.parse_bizcoupon),
     "countrypwr.com": ("requests", parsers.meetyourmarkets.parse_countrypwr),
-    "bizmakersamerica.org": ("requests", parsers.meetyourmarkets.parse_bizmakersamerica),
     "homify.com": ("requests", parsers.homify.parse_homify),
     "cake.me": ("requests", parsers.cake.parse_cake),
-    "americasmallbiz.com": ("requests", parsers.americasmallbiz.parse_americasmallbiz),
-    "bizforgeusa.com": ("requests", parsers.bizforgeusa.parse_bizforgeusa),
-    "bigbizstuff.com": ("requests", parsers.bigbizstuff.parse_bigbizstuff),
-    "biz411.org": ("requests", parsers.biz411.parse_biz411),
-    "bizbangboom.com": ("requests", parsers.bizbangboom.parse_bizbangboom),
-    "bizbuildboom.com": ("requests", parsers.bizbuildboom.parse_bizbuildboom),
-    "bizlinkbuilder.com": ("requests", parsers.bizlinkbuilder.parse_bizlinkbuilder),
-    "blogbangboom.com": ("requests", parsers.blogbangboom.parse_blogbangboom),
     "homepros411.com": ("requests", parsers.homepros411.parse_homepros411),
     "selfemployedai.com": ("requests", parsers.selfemployedai.parse_selfemployedai),
     "smallbizamerica.org": ("requests", parsers.smallbizamerica.parse_smallbizamerica),
     "smallbizblog.net": ("requests", parsers.smallbizblog.parse_smallbizblog),
     "perrysplacepromotions.org": ("requests", parsers.perrysplacepromotions.parse_perrysplacepromotions),
     "provenemployer.com": ("requests", parsers.provenemployer.parse_provenemployer),
-    "biztobiz.org": ("requests", parsers.biztobiz.parse_biztobiz),
-    "bizmaker.org": ("playwright", parsers.bizmaker.parse_bizmaker),
 }
 
 
