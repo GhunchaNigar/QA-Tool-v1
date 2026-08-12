@@ -307,11 +307,6 @@ SOURCE_FIELDS = {
         "Phone", "Website URL", "Keywords", "Description",
         "Social Media Links", "Category", "Logo",
     ],
-    "homepros411.com":[
-         "Name", "Street", "City", "State" , "Zipcode" , "Country",
-          "Phone ",   "Website URL", "Description", "Hours", 
-          "Social Media Links", " Category", "Logo",
-    ],
     "perrysplacepromotions.org": [
         "Name", "Street", "City", "State", "Zipcode", "Country",
         "Phone", "Website URL", "Description", "Hours",
