@@ -1,9 +1,3 @@
-"""
-Imports every per-site parser module so that dispatch.py can refer to
-them as parsers.<module>.parse_xxx. Add new site parsers here.
-"""
-
-
 from . import a_zbusinessfinder
 from . import americansearch
 from . import askmap
@@ -14,19 +8,13 @@ from . import bizcoupon
 from . import bizhwy
 from . import blinx_biz
 from . import blogs_globalbusinessdirectory
-from . import bpublic
 from . import bulkpostads
-from . import callupcontact
-from . import cataloxy
 from . import chamberofcommerce
 from . import citysquares
 from . import cleansway
 from . import closelocation
-from . import cybo
 from . import dbesearch
-from . import earthmom
 from . import find_us_here
-from . import findabusinesspro
 from . import freelistingusa
 from . import fyple
 from . import globalbusinessdirectory
@@ -58,30 +46,14 @@ from . import trueen
 from . import trustburn
 from . import vetslist
 from . import vymaps
-from . import webforcompany
-from . import whatsyourhours
 from . import wireanium
 from . import x911getit
 from . import yourbizlistings
 from . import yplocal
-from . import zeemaps
 from . import zipleaf
 from . import zumvu
 from . import homify
 from . import cake
-from . import americasmallbiz 
-from . import bizforgeusa
-from . import bigbizstuff
-from . import biz411
-from . import bizbangboom
-from . import bizbuildboom
-from . import bizlinkbuilder
-from . import blogbangboom
 from . import homepros411
-from . import selfemployedai
-from . import smallbizamerica
-from . import smallbizblog
 from . import perrysplacepromotions
 from . import provenemployer
-from . import biztobiz
-from . import bizmaker
