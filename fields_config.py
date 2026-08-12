@@ -44,12 +44,6 @@ SOURCE_FIELDS = {
         "Phone", "Website URL", "Keywords", "Description", "Hours",
         "Category", "Logo",
     ],
-    "earthmom.org": [
-        "Name", "Street", "City", "State", "Zipcode", "Country",
-        "Phone", "Website URL", "Description",
-        "Hours", "Social Media Links", "GBP Link",
-        "Category", "Logo", 
-    ],
     "gravitysplash.com": [
         "Name", "Street", "City", "State", "Zipcode",
         "Phone", "Website URL", "Description",
@@ -311,11 +305,6 @@ SOURCE_FIELDS = {
     "homify.com": [
         "Name", "Street", "City", "State", "Zipcode",
         "Phone", "Website URL", "Keywords", "Description",
-        "Social Media Links", "Category", "Logo",
-    ],
-    "bigbizstuff.com": [
-        "Name", "Street", "City", "State", "Zipcode", "Country",
-        "Phone", "Website URL", "Description", "Hours",
         "Social Media Links", "Category", "Logo",
     ],
     "homepros411.com":[
