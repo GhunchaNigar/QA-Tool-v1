@@ -212,11 +212,6 @@ SOURCE_FIELDS = {
         "Name", "Street", "City", "State", "Zipcode",
         "Phone", "Website URL", "Description", "Hours", "Category",
     ],
-    "local-biz.directory": [
-        "Name", "Street", "City", "State", "Zipcode",
-        "Phone", "Website URL", "Keywords", "Description",
-        "Category", "Logo",
-    ],
     "vetslist.com": [
         "Name", "Street", "City", "State", "Zipcode", "Country",
         "Phone", "Website URL", "Description",
