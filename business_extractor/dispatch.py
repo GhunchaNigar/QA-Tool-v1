@@ -69,7 +69,6 @@ SITE_PARSERS = {
     "countrypwr.com": ("requests", parsers.meetyourmarkets.parse_countrypwr),
     "homify.com": ("requests", parsers.homify.parse_homify),
     "cake.me": ("requests", parsers.cake.parse_cake),
-    "homepros411.com": ("requests", parsers.homepros411.parse_homepros411),
     "perrysplacepromotions.org": ("requests", parsers.perrysplacepromotions.parse_perrysplacepromotions),
     "provenemployer.com": ("requests", parsers.provenemployer.parse_provenemployer),
 }
