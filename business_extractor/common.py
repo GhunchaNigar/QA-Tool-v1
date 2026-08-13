@@ -104,6 +104,7 @@ _FINDUSHERE_EXCLUDED_LINK_DOMAINS = (
 # of raising the default for every site.
 SLOW_FETCH_TIMEOUTS_MS = {
     "supplyautonomy.com": 90000,
+    "zumvu.com": 90000,
 }
 
 
