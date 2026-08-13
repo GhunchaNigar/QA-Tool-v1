@@ -57,6 +57,8 @@ __all__ = [
     '_FIELD_EMPTY_DEFAULTS',
     '_empty_value_for',
     'filter_business_fields',
+    '_band_description_sections',
+    '_split_listings_gbd_address',
 ]
 
 import json
@@ -157,7 +159,47 @@ def _split_city_state_zip_address(address):
     return _split_blinx_address(address)
 
 
-    
+def _split_listings_gbd_address(address):
+    """Split the My Listing theme's rendered address block.
+
+    Unlike blinx.biz, this theme's map-block-address text has no street
+    segment -- it's just "City, State Zip[, Country]" (e.g.
+    "Plano, Texas 75023, United States"). Reusing _split_blinx_address()
+    here mis-shifts every field by one, because that function assumes a
+    leading street part whenever there are >=2 comma-separated pieces.
+
+    Strategy: drop a trailing country segment (it has no digits, whereas
+    the "State Zip" segment does), then treat whatever's left as
+    City, State Zip -- or Street, City, State Zip if there happen to be
+    three or more parts remaining.
+    """
+    street, city, state, zipcode = "", "", "", ""
+
+    parts = [p.strip() for p in address.split(",") if p.strip()]
+
+    # Trailing country segment has no digits (e.g. "United States"); the
+    # "State Zip" segment right before it does (e.g. "Texas 75023").
+    if len(parts) >= 2 and not re.search(r"\d", parts[-1]):
+        parts = parts[:-1]
+
+    if len(parts) >= 3:
+        street = ", ".join(parts[:-2])
+        city = parts[-2]
+        state_zip = parts[-1]
+    elif len(parts) == 2:
+        city = parts[0]
+        state_zip = parts[1]
+    elif len(parts) == 1:
+        state_zip = parts[0]
+
+    match = re.match(r"^(.*?)\s+([\w-]*\d[\w-]*)$", state_zip.strip())
+    if match:
+        state = match.group(1).strip()
+        zipcode = match.group(2).strip()
+    else:
+        state = state_zip.strip()
+
+    return street, city, state, zipcode
 
 def _decode_cf_email(hex_string):
     """Decode Cloudflare's [email protected] obfuscation.
@@ -184,7 +226,23 @@ def _decode_cf_email(hex_string):
     except UnicodeDecodeError:
         return ""
 
+def _band_description_sections(description, labels=None):
+    if not description:
+        return {}
 
+    labels = labels or _BAND_DESCRIPTION_LABELS
+    canonical_by_lower = {label.lower(): label for label in labels}
+    label_pattern = "|".join(re.escape(l) for l in labels)
+    matches = list(re.finditer(rf"(?:^|\n)({label_pattern}):?\n?", description, flags=re.I))
+
+    sections = {}
+    for i, m in enumerate(matches):
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(description)
+        canonical_label = canonical_by_lower[m.group(1).lower()]
+        sections[canonical_label] = clean(description[start:end])
+    return sections
+    
 def _find_cf_email(soup):
     # Form 1: <a href="/cdn-cgi/l/email-protection#HEX">
     link = soup.select_one('a[href*="/cdn-cgi/l/email-protection#"]')
