@@ -143,11 +143,26 @@ def parse_linkcentre(url, html):
                 break
 
     # ---- Description fallback (meta description) ----
+    # LinkCentre auto-generates the meta description tag for every
+    # listing that has no real bio/about text filled in, using a fixed
+    # template: "{name}. [phone icon] {phone}. Get directions, read
+    # reviews & contact details." -- confirmed verbatim on
+    # markvigildombeckphd ("Mark Vigil Dombeck, PhD. (510) 900-5123.
+    # Get directions, read reviews & contact details."). That's just
+    # restating fields already extracted separately (Name, Phone), not
+    # a real description, so using it as Description reports boilerplate
+    # as if the business had written something -- worse than leaving
+    # the field empty. Detect that fixed tail phrase and skip it; any
+    # OTHER meta description (a listing that actually has one) still
+    # comes through normally.
+    _LC_GENERIC_META_DESC_RE = re.compile(
+        r"get directions,\s*read reviews\s*&\s*contact details\.?\s*$", re.I
+    )
     if not business["Description"]:
         meta_desc = soup.find("meta", attrs={"name": "description"})
         if meta_desc:
             desc = clean(meta_desc.get("content", ""))
-            if is_meaningful(desc):
+            if is_meaningful(desc) and not _LC_GENERIC_META_DESC_RE.search(desc):
                 business["Description"] = desc
 
     # ---- Category fallback  ----
