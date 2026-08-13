@@ -5,13 +5,6 @@ Site parser: yplocal.com
 from ..common import *  # noqa: F401,F403 -- see business_extractor/common.py
 
 
-
-_YPLOCAL_ADDRESS_RE = re.compile(
-    r"^(?P<street>.+),\s*(?P<city>[^,]+),\s*"
-    r"(?P<state>[A-Za-z][A-Za-z .]*?)\s+(?P<zip>\d{5}(?:-\d{4})?)$"
-)
-
-
 def _yplocal_jsonld_local_business(soup):
     """Return the LocalBusiness object from the page's JSON-LD (handles
     both a plain object/list and an @graph-wrapped block)."""
@@ -95,41 +88,50 @@ def parse_yplocal(url, html):
                 business["Keywords"] = kw_text
             break
 
-    # ---- Address (single unstructured string -> Street/City/State/Zip) ----
-    # The address container holds multiple sibling <span> elements (e.g.
-    # <span>Plano TX</span>, <span>75023</span>) -- selecting just the
-    # first <span> drops everything after it (the zip code). Pull the
-    # whole container's text instead.
+    # ---- Address ----
+    # The address container holds a run of sibling <span> elements
+    # separated only by bare punctuation/`<br>` -- e.g.:
+    #   <span>1402 Park St, Ste G</span><br><span>Alameda</span>,
+    #   <span>California</span>, <span>94501</span><br>United States
+    # Because there's no whitespace between the spans in the markup,
+    # calling get_text() on the whole container concatenates them with
+    # no separator (e.g. "...Ste GAlameda, California, 94501United
+    # States"), which breaks any regex expecting a normally-spaced
+    # "street, city, state zip" string. Read each <span> on its own
+    # instead -- each one is already a clean, self-contained field --
+    # rather than trying to regex-split the flattened text blob.
     addr_container = soup.select_one(".overview-tab-the-member-address .col-sm-8")
-    addr_text = clean(addr_container.get_text()) if addr_container else ""
+    if addr_container:
+        spans = [clean(s.get_text()) for s in addr_container.find_all("span")]
+        spans = [s for s in spans if s]
 
-    match = _YPLOCAL_ADDRESS_RE.match(addr_text) if addr_text else None
-    if match:
-        business["Street"] = clean(match.group("street"))
-        business["City"] = clean(match.group("city"))
-        business["State"] = clean(match.group("state"))
-        business["Zipcode"] = match.group("zip")
-    else:
-        # No street on file -- the address is just "City ST, Zipcode"
-        # (e.g. "Plano TX, 75023"), so split the "City ST" chunk from
-        # the trailing zip, then split city from the 2-letter state.
-        city_state_zip = re.match(
-            r"^(?P<city_state>.+?),\s*(?P<zip>\d{5}(?:-\d{4})?)$", addr_text
-        ) if addr_text else None
-        if city_state_zip:
-            city_state = city_state_zip.group("city_state").strip()
-            business["Zipcode"] = city_state_zip.group("zip")
-            cs_match = re.match(r"^(.*?)\s+([A-Z]{2})$", city_state)
+        if len(spans) >= 4:
+            # Full form: Street, City, State, Zip
+            business["Street"] = spans[0]
+            business["City"] = spans[1]
+            business["State"] = spans[2]
+            business["Zipcode"] = spans[3]
+        elif len(spans) == 3:
+            # No street span on file: City, State, Zip
+            business["City"] = spans[0]
+            business["State"] = spans[1]
+            business["Zipcode"] = spans[2]
+        elif len(spans) == 2:
+            # No street on file and city/state share one span, e.g.
+            # "Plano TX" / "75023" -- split the trailing 2-letter
+            # state abbreviation off the city.
+            city_state, zipcode = spans[0], spans[1]
+            business["Zipcode"] = zipcode
+            cs_match = re.match(r"^(.*?)\s+([A-Za-z]{2})$", city_state)
             if cs_match:
                 business["City"] = cs_match.group(1).strip()
                 business["State"] = cs_match.group(2)
             else:
                 business["City"] = city_state
-        elif addr_text:
-            # Fall back to storing the raw string as Street rather than
-            # dropping the address entirely if it doesn't match any of
-            # the expected shapes.
-            business["Street"] = addr_text
+        elif len(spans) == 1:
+            # Only one field on file -- keep it rather than dropping
+            # the address entirely.
+            business["Street"] = spans[0]
 
     # ---- Country  ----
     addr_obj = ld_business.get("address")
@@ -200,5 +202,3 @@ def parse_yplocal(url, html):
             business["GBP Link"] = location["hasMap"]
 
     return business
-
-
