@@ -78,12 +78,47 @@ def parse_azbusinessfinder(url, html):
         if web_match:
             business["Website URL"] = web_match.group(1).strip("<>")
 
-    # ---- Category  ----
-    breadcrumb = soup.find(lambda tag: tag.name in ("nav", "div", "ul", "ol", "p", "table", "tr", "td") and "»" in tag.get_text())
-    if breadcrumb:
-        crumb_links = breadcrumb.find_all("a")
-        if crumb_links:
-            business["Category"] = clean(crumb_links[-1].get_text())
+    # ---- Category (breadcrumb) ----
+    # This template's breadcrumb anchors each carry their own
+    # class="breadcrumb" (USA -> California -> Alameda -> the actual
+    # category, e.g. "Psychologist"), so select those directly rather
+    # than searching for a generic container tag containing "»".
+    #
+    # That generic search (`tag.name in (...) and "»" in tag.get_text()`)
+    # used to match the FIRST tag satisfying it in document order --
+    # but "»" being anywhere in a tag's full text means every ancestor
+    # wrapping the real breadcrumb div also "contains" it, and the
+    # outermost page wrapper (e.g. .off-canvas-wrap) comes first.
+    # find_all("a") on that wrapper then pulls in every anchor on the
+    # whole page (nav links, star-rating icons, etc.), and the actual
+    # category name only survived if the LAST such anchor in document
+    # order happened to be the real breadcrumb link -- on this listing
+    # it was an icon-only star-rating <a> with no text, so Category
+    # came back "" instead of "Psychologist".
+    crumb_links = [a for a in soup.select("a.breadcrumb") if is_meaningful(clean(a.get_text()))]
+    if crumb_links:
+        business["Category"] = clean(crumb_links[-1].get_text())
+
+    if not business["Category"]:
+        # Fallback for pages that don't use class="breadcrumb" on the
+        # links themselves: same idea, but requires "»" to be a DIRECT
+        # text child of the tag (not just present somewhere in its
+        # descendants), so a page-wide wrapper div can no longer match
+        # ahead of the actual breadcrumb container.
+        def _has_direct_raquo(tag):
+            return any(
+                isinstance(child, NavigableString) and "\u00bb" in child
+                for child in tag.children
+            )
+
+        breadcrumb = soup.find(
+            lambda tag: tag.name in ("nav", "div", "ul", "ol", "p", "table", "tr", "td")
+            and _has_direct_raquo(tag)
+        )
+        if breadcrumb:
+            fallback_links = [a for a in breadcrumb.find_all("a") if is_meaningful(clean(a.get_text()))]
+            if fallback_links:
+                business["Category"] = clean(fallback_links[-1].get_text())
 
     # ---- Description ----
     desc_header = soup.find(string=re.compile(r"Business/Community Description", re.I))
@@ -115,5 +150,3 @@ def parse_azbusinessfinder(url, html):
             business["Logo"] = urljoin(url, og_image["content"])
 
     return business
-
-
