@@ -121,26 +121,6 @@ def _split_address_allow_no_comma(address):
 
 
 def _split_city_state_zip_address(address):
-    """Split addresses with NO street segment, in either of two shapes:
-
-      (a) Comma-free "City State Zip" (e.g. "Plano TX 75023") -- used by
-          askmap.net, blogs.globalbusinessdirectory.us, place123.net,
-          milestones.business, earthmom.org, gravitysplash.com,
-          webforcompany.com, and local-biz.directory.
-
-      (b) Two comma-separated spans, "City State, Zip" (e.g.
-          preferredprofessionals.com renders <span>Plano TX</span>,
-          <span>75023</span> -> "Plano TX, 75023").
-
-    _split_blinx_address() assumes commas separate street/city/state-zip.
-    Shape (a) has no commas at all, so it lands in _split_blinx_address()
-    as one trailing "State Zip" token and mis-splits into
-    state="Plano TX", zipcode="75023", city="" (never populated). Shape
-    (b) fares no better: _split_blinx_address() takes street="Plano TX",
-    state_zip="75023" -- and since "75023" has no internal whitespace to
-    split on, that regex fails too, leaving state="75023" and city blank.
-    Detect both shapes directly here instead of falling through.
-    """
     address = address.strip()
 
     # Shape (a): comma-free "City State Zip".
@@ -161,25 +141,10 @@ def _split_city_state_zip_address(address):
 
 
 def _split_listings_gbd_address(address):
-    """Split the My Listing theme's rendered address block.
-
-    Unlike blinx.biz, this theme's map-block-address text has no street
-    segment -- it's just "City, State Zip[, Country]" (e.g.
-    "Plano, Texas 75023, United States"). Reusing _split_blinx_address()
-    here mis-shifts every field by one, because that function assumes a
-    leading street part whenever there are >=2 comma-separated pieces.
-
-    Strategy: drop a trailing country segment (it has no digits, whereas
-    the "State Zip" segment does), then treat whatever's left as
-    City, State Zip -- or Street, City, State Zip if there happen to be
-    three or more parts remaining.
-    """
     street, city, state, zipcode = "", "", "", ""
 
     parts = [p.strip() for p in address.split(",") if p.strip()]
 
-    # Trailing country segment has no digits (e.g. "United States"); the
-    # "State Zip" segment right before it does (e.g. "Texas 75023").
     if len(parts) >= 2 and not re.search(r"\d", parts[-1]):
         parts = parts[:-1]
 
@@ -193,10 +158,16 @@ def _split_listings_gbd_address(address):
     elif len(parts) == 1:
         state_zip = parts[0]
 
-    match = re.match(r"^(.*?)\s+([\w-]*\d[\w-]*)$", state_zip.strip())
+    # Match "<state> <zip>" with optional trailing junk (e.g. a country
+    # name glued on with no comma, as in "CA 94501 United States").
+    # State prefix is optional too, in case state_zip is zip-only.
+    match = re.match(
+        r"^(?:(?P<state>.*?)\s+)?(?P<zip>\d{5}(?:-\d{4})?)(?:\s+.*)?$",
+        state_zip.strip(),
+    )
     if match:
-        state = match.group(1).strip()
-        zipcode = match.group(2).strip()
+        state = (match.group("state") or "").strip()
+        zipcode = match.group("zip")
     else:
         state = state_zip.strip()
 
