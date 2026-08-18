@@ -152,12 +152,20 @@ def _write_business_info_sheet(ws, user_data: dict):
         # (see app.py) rather than free text — show something readable.
         if field in ("Logo", "Photos"):
             value = "Should be present" if value else "Not required"
+        # Any field left blank on the form -> show "N/A" instead of an
+        # empty cell, so it reads as "not provided" rather than "missing".
+        if isinstance(value, str) and not value.strip():
+            value = "N/A"
         ws.append([field, value])
         row_idx = ws.max_row
         _style_cell(ws.cell(row_idx, 1),
             font=Font(bold=True, size=10), alignment=ALIGN_LEFT, border=BORDER_THIN)
-        _style_cell(ws.cell(row_idx, 2),
-            font=FONT_NORMAL, alignment=ALIGN_LEFT, border=BORDER_THIN)
+        if value == "N/A":
+            _style_cell(ws.cell(row_idx, 2),
+                fill=FILL_GRAY, font=FONT_GRAY, alignment=ALIGN_LEFT, border=BORDER_THIN)
+        else:
+            _style_cell(ws.cell(row_idx, 2),
+                font=FONT_NORMAL, alignment=ALIGN_LEFT, border=BORDER_THIN)
 
     ws.column_dimensions["A"].width = 22
     ws.column_dimensions["B"].width = 60
