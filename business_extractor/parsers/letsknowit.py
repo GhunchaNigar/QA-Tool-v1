@@ -6,40 +6,76 @@ from ..common import *  # noqa: F401,F403 -- see business_extractor/common.py
 
 
 
+def _letsknowit_label_el(h3):
+    """Find the label element of an <h3> detail row. Current markup uses
+    <span class="lkit-biz-fact__label">Label</span>; older markup used
+    <label><small>Label:</small></label>. Support both."""
+    return h3.select_one(".lkit-biz-fact__label") or h3.find("small")
+
+
+def _letsknowit_value_el(h3):
+    """Find the value element of an <h3> detail row. Current markup uses
+    <span class="lkit-biz-fact__value">value</span> (there's also a
+    sibling icon-only <span class="lkit-biz-fact__icon">, so this must be
+    targeted specifically rather than just grabbing the first <span>).
+    Older markup had a single plain <span>value</span>, so fall back to
+    that when the newer class isn't present."""
+    return h3.select_one(".lkit-biz-fact__value") or h3.find("span")
+
+
 def _letsknowit_detail_value(details, label_keyword):
-    """The '.companyDetails' block is a flat list of <h3><label>icon</label>
-    <label><small>Label:</small></label><span>value</span></h3> rows (e.g.
-    Headquarter, Phone, Company Size). Finds the row whose <small> label
-    text matches label_keyword and returns its <span> value."""
+    """The '.companyDetails' block is a flat list of <h3> rows (Location,
+    Headquarter, Phone, Company Size, Website, ...), each with a label and
+    a value. Finds the row whose label text matches label_keyword and
+    returns its value text."""
     if not details:
         return None
     for h3 in details.find_all("h3"):
-        label_el = h3.find("small")
+        label_el = _letsknowit_label_el(h3)
         if label_el and label_keyword.lower() in clean(label_el.get_text()).lower():
-            span = h3.find("span")
-            if span:
-                return clean(span.get_text())
+            value_el = _letsknowit_value_el(h3)
+            if value_el:
+                return clean(value_el.get_text())
     return None
 
 
 def _letsknowit_address_row(details):
-    """The '.companyDetails' block's *first* <h3> is unlabeled -- its
-    <label> holds only the map-marker icon (no <small> caption) -- and its
-    <span> holds the full 'Street, City, State Zip, Country' address. This
-    is the real address; the separate 'Headquarter:' row is almost always
-    just an unset 'N/A' placeholder and should only be used as a fallback."""
+    """Legacy markup fallback: older pages had an *unlabeled* <h3> (icon
+    only, no caption) whose <span> held the full 'Street, City, State Zip,
+    Country' address. Current markup labels this row "Location" instead --
+    see parse_letsknowit(), which tries _letsknowit_detail_value(details,
+    "location") first and only falls back to this function for the old,
+    unlabeled shape."""
     if not details:
         return None
     for h3 in details.find_all("h3"):
-        if h3.find("small"):
+        if _letsknowit_label_el(h3):
             continue  # a labeled row (Headquarter, Phone, Company Size, Website)
         if not h3.select_one("i.fa-map-marker"):
             continue
-        span = h3.find("span")
-        if span:
-            text = clean(span.get_text())
+        value_el = _letsknowit_value_el(h3)
+        if value_el:
+            text = clean(value_el.get_text())
             if text:
                 return text
+    return None
+
+
+def _letsknowit_website_url(details):
+    """The 'Website' row's value is an <a href="..."> whose visible text
+    is a truncated display domain (e.g. "psychtools.com"), not the full
+    URL, so pull the href attribute directly rather than reusing
+    _letsknowit_detail_value's text extraction."""
+    if not details:
+        return None
+    for h3 in details.find_all("h3"):
+        label_el = _letsknowit_label_el(h3)
+        if label_el and "website" in clean(label_el.get_text()).lower():
+            value_el = _letsknowit_value_el(h3)
+            if value_el:
+                link = value_el.find("a", href=True)
+                if link:
+                    return link["href"].strip()
     return None
 
 
@@ -113,7 +149,13 @@ def parse_letsknowit(url, html):
     details = soup.select_one(".companyDetails.profilegeneraldetail")
 
     # ---- Street / City / State / Zipcode ----
-    map_row_text = _letsknowit_address_row(details)
+    # Current markup labels this row "Location"; older pages left it
+    # unlabeled (icon only) -- try the labeled lookup first, then fall
+    # back to the legacy unlabeled-row scan.
+    map_row_text = (
+        _letsknowit_detail_value(details, "location")
+        or _letsknowit_address_row(details)
+    )
     headquarter_text = _letsknowit_detail_value(details, "headquarter")
     address_text = max(
         (map_row_text, headquarter_text),
@@ -138,13 +180,19 @@ def parse_letsknowit(url, html):
         if tel:
             business["Phone"] = clean(tel.get_text())
 
-    # ---- Website URL ("Website:" row, marked with the tl_exp class) ----
+    # ---- Website URL ("Website" row) ----
+    # Older markup marked the value span with a "tl_exp" class; current
+    # markup uses the generic .lkit-biz-fact__value structure instead --
+    # try the legacy selector first, then the current one.
     if details:
         website_span = details.select_one("h3 span.tl_exp")
-        if website_span:
-            link = website_span.find("a", href=True)
-            if link:
-                business["Website URL"] = link["href"].strip()
+        link = website_span.find("a", href=True) if website_span else None
+        if link:
+            business["Website URL"] = link["href"].strip()
+        else:
+            url_val = _letsknowit_website_url(details)
+            if url_val:
+                business["Website URL"] = url_val
 
     # ---- Business Email (sidebar "Contact Details" widget -- the mailto
     #      href itself is blanked out client-side, so read the visible
@@ -189,5 +237,3 @@ def parse_letsknowit(url, html):
             business["Photos"] = photos
 
     return business
-
-
