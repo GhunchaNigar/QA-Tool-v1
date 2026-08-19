@@ -105,6 +105,8 @@ _FINDUSHERE_EXCLUDED_LINK_DOMAINS = (
 SLOW_FETCH_TIMEOUTS_MS = {
     "supplyautonomy.com": 90000,
     "zumvu.com": 90000,
+    "cake.me": 90000,
+    "gravitysplash.com": 90000,
 }
 
 
