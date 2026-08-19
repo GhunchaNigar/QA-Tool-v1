@@ -65,10 +65,17 @@ def parse_globeconnected(url, html):
         business["State"] = state
         business["Zipcode"] = zipcode
 
-    # ---- Country (JSON-LD only; not rendered anywhere on the page) ----
-    addr_obj = jsonld.get("address")
-    if isinstance(addr_obj, dict) and addr_obj.get("addressCountry"):
-        business["Country"] = clean(addr_obj["addressCountry"])
+    # ---- Country (rendered on the page as p.country; JSON-LD is a
+    #      fallback for listings that omit it -- e.g. this template's
+    #      LocalBusiness JSON-LD does not always include addressCountry) ----
+    country_tag = soup.select_one("p.country")
+    if country_tag:
+        business["Country"] = clean(country_tag.get_text())
+
+    if not business["Country"]:
+        addr_obj = jsonld.get("address")
+        if isinstance(addr_obj, dict) and addr_obj.get("addressCountry"):
+            business["Country"] = clean(addr_obj["addressCountry"])
 
     # ---- Phone ----
     tel = soup.select_one("p.phone a[href^='tel:']")
@@ -127,16 +134,15 @@ def parse_globeconnected(url, html):
     #      -- e.g. "/images/cat-jc-logo.png" -- when the business hasn't
     #      uploaded a real photo, and still reports that placeholder in
     #      JSON-LD as if it were genuine. Skip it so we don't report a
-    #      logo that isn't actually the business's own. og:image on this
-    #      template is the directory site's own logo, so it's only used
-    #      as a last-resort fallback and is unaffected by this filter.)
+    #      logo that isn't actually the business's own.
+    #
+    #      NOTE: deliberately NO og:image fallback here. On this
+    #      template og:image is always Globe Connected's own site logo
+    #      (e.g. "GClogo-*.svg"), not a photo of the individual
+    #      business -- using it as a fallback produced a false
+    #      "Logo: PRESENT" for every listing lacking a genuine photo.) --
     jsonld_image = jsonld.get("image")
     if jsonld_image and not _GLOBECONNECTED_GENERIC_LOGO_RE.search(jsonld_image):
         business["Logo"] = urljoin(url, jsonld_image)
-
-    if not business["Logo"]:
-        og_image = soup.find("meta", property="og:image")
-        if og_image and og_image.get("content"):
-            business["Logo"] = urljoin(url, og_image["content"])
 
     return business
