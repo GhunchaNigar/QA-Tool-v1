@@ -137,7 +137,7 @@ def extract_social_links(soup):
     return sorted(links)
 
 
-def parse_listing(html: str, source_url: str = None) -> dict:
+def parse_citiesglobalbusinessdirectory(html: str, source_url: str = None) -> dict:
     soup = BeautifulSoup(html, "lxml")
     ld = extract_json_ld(soup) or {}
 
@@ -221,5 +221,4 @@ def main(argv):
     print(json.dumps(results, indent=2, ensure_ascii=False))
 
 
-if __name__ == "__main__":
-    main(sys.argv)
+
