@@ -139,7 +139,7 @@ def extract_social_links(soup):
     return sorted(links)
 
 
-def parse_localglobalbusinessdirectory.py(html: str, source_url: str = None) -> dict:
+def parse_localglobalbusinessdirectory(html: str, source_url: str = None) -> dict:
     soup = BeautifulSoup(html, "lxml")
     ld = extract_json_ld(soup) or {}
 
