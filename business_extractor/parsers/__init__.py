@@ -56,7 +56,6 @@ from . import perrysplacepromotions
 from . import provenemployer
 from . import listings_globalbusinessdirectory
 from . import local_globalbusinessdirectory
-from . import usa_globalbusinessdirectory
 from . import countrypwr
 from . import bulkadspost
 from . import cities_globalbusinessdirectory
