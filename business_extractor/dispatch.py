@@ -60,10 +60,7 @@ SITE_PARSERS = {
     "yourbizlistings.com": ("requests", parsers.yourbizlistings.parse_yourbizlistings),
     "bulkpostads.com": ("requests", parsers.bulkpostads.parse_bulkpostads),
     "meetyourmarkets.com": ("requests", parsers.meetyourmarkets.parse_meetyourmarkets),
-    # bulkadspost.com is the sister listings site to bulkpostads.com --
-    # same GeoDirectory theme/markup (verified against a live listing
-    # page), so it reuses parsers.bulkpostads.parse_bulkpostads rather than duplicating it.
-    "bulkadspost.com": ("requests", parsers.bulkpostads.parse_bulkpostads),
+    "bulkadspost.com": ("requests", parsers.bulkadspost.parse_listing),
     "bizcoupon.directory": ("requests", parsers.bizcoupon.parse_bizcoupon),
     "countrypwr.com": ("requests", parsers.meetyourmarkets.parse_countrypwr),
     "homify.com": ("requests", parsers.homify.parse_homify),
