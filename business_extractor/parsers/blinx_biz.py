@@ -141,6 +141,94 @@ def _split_listings_gbd_address(address):
     return street, city, state, zipcode
 
 
+_BLINX_CONTACT_ADDRESS_RE = re.compile(
+    r"^(?P<street_city>.+?),\s*(?P<state>[A-Za-z]{2})\s+(?P<zip>\d{5}(?:-\d{4})?)$"
+)
+
+# Street-type suffix tokens that signal we're still inside the street
+# portion, not the city, when walking backward through the tokens of
+# "<street> <city>" looking for the street/city boundary (see
+# _split_blinx_contact_address below).
+_STREET_SUFFIX_TOKENS = {
+    "st", "st.", "street", "ave", "ave.", "avenue", "blvd", "blvd.",
+    "boulevard", "rd", "rd.", "road", "dr", "dr.", "drive", "ln", "ln.",
+    "lane", "ct", "ct.", "court", "pl", "pl.", "place", "way", "hwy",
+    "highway", "pkwy", "parkway", "cir", "circle", "ter", "terrace",
+    "trl", "trail", "sq", "square", "loop", "suite", "ste", "ste.",
+}
+
+
+def _split_blinx_contact_address(address):
+    """
+    Splits the "street_address" field of a blinx.biz contact_details link
+    (a richer address than the top-level record's "address" field, but
+    rendered with NO comma between street and city -- only before
+    "state zip", e.g. "2244 Faraday Ave #206 Carlsbad, CA 92008").
+
+    _split_blinx_address() assumes a comma separates street from city,
+    so on this shape it lumps "<street> <city>" into a single trailing
+    "state_zip" token and fails outright, leaving city/state/zip blank
+    (or, worse, dumping the whole string into "state" -- see
+    _split_blinx_address's docstring-less regex, which requires a
+    word-only token at the very end and chokes on "#206").
+
+    Strategy: split off the trailing ", <state> <zip>" first (unambiguous
+    since state+zip is separated from street+city by the only comma).
+    Then, since street and city are separated by nothing but a space,
+    walk backward through the remaining tokens collecting the city --
+    stopping as soon as a token contains a digit/"#" or is a common
+    street-type suffix (Ave, Blvd, Ste, ...), which signals we've walked
+    back into the street portion.
+
+    Returns (street, city, state, zipcode), or ("", "", "", "") if the
+    address doesn't end in the expected ", ST ZIP" shape.
+    """
+    if not address:
+        return "", "", "", ""
+
+    match = _BLINX_CONTACT_ADDRESS_RE.match(address.strip())
+    if not match:
+        return "", "", "", ""
+
+    state = match.group("state")
+    zipcode = match.group("zip")
+    street_city = match.group("street_city").strip()
+
+    tokens = street_city.split()
+    city_tokens = []
+    for token in reversed(tokens):
+        bare = token.strip(".,#").lower()
+        if not bare or any(ch.isdigit() for ch in token) or "#" in token or bare in _STREET_SUFFIX_TOKENS:
+            break
+        city_tokens.insert(0, token)
+
+    if city_tokens:
+        city = " ".join(city_tokens)
+        street = " ".join(tokens[: len(tokens) - len(city_tokens)]).strip()
+    else:
+        city = ""
+        street = street_city
+
+    return street, city, state, zipcode
+
+
+def _find_blinx_contact_details(links):
+    """
+    Finds the "contact_details" link entry in the __NEXT_DATA__ payload's
+    "links" list and returns its "linkable" dict (which carries a fuller
+    street_address/email/website/phone than the top-level record), or
+    None if there isn't one.
+    """
+    if not isinstance(links, list):
+        return None
+    for entry in links:
+        if isinstance(entry, dict) and entry.get("linkable_type") == "contact_details":
+            linkable = entry.get("linkable")
+            if isinstance(linkable, dict):
+                return linkable
+    return None
+
+
 _BLINX_RENDERED_ADDRESS_RE = re.compile(
     r"^(?P<street>.+?),\s*(?P<city>[^,]+?),\s*(?P<state>[A-Za-z]{2,})\s*,?\s*(?P<zip>\d{5}(?:-\d{4})?)$"
 )
@@ -283,7 +371,11 @@ def parse_blinx(url, html):
 
         business["Country"] = record.get("country", "")
         business["Phone"] = record.get("phone", "")
-        business["Business Email"] = record.get("email", "")
+        # NOTE: intentionally NOT set from record.get("email") here -- see
+        # the contact_details block below, which supplies the real
+        # practice email; record["email"] is often a synthetic/placeholder
+        # address (e.g. "thelawoffic@emailsl.com") rather than what's
+        # actually shown on the page.
 
         logo = record.get("logo") or record.get("image")
         if logo:
@@ -291,11 +383,12 @@ def parse_blinx(url, html):
 
         _blinx_links_to_business(business, record.get("links"))
 
-        # The API's "address" field can be a full "Street, City, State Zip"
-        # string, or -- as seen here -- just "City State Zip" with no
-        # street and no commas at all. Use the no-comma-aware splitter so
-        # both shapes are handled; the DOM extraction below overrides this
-        # when it finds a more complete rendered address anyway.
+        # The API's top-level "address" field can be a full
+        # "Street, City, State Zip" string, or -- as seen here -- just the
+        # street with no city/state/zip and no commas at all. Use the
+        # no-comma-aware splitter so both shapes are handled; the
+        # contact_details and DOM extraction below override this with a
+        # more complete address when they find one.
         address = record.get("address", "")
         if address:
             street, city, state, zipcode = _split_address_allow_no_comma(address)
@@ -303,6 +396,36 @@ def parse_blinx(url, html):
             business["City"] = city
             business["State"] = state
             business["Zipcode"] = zipcode
+
+        # ---- contact_details link: fuller address/email/website/phone ----
+        # The top-level "address" field is often street-only. The
+        # "contact_details" link entry (rendered as the page's "Contact
+        # details" card) carries a fuller street_address string like
+        # "2244 Faraday Ave #206 Carlsbad, CA 92008" -- no comma between
+        # street and city, so it needs its own splitter (see
+        # _split_blinx_contact_address). It also carries the real practice
+        # email/website/phone, which can differ from the top-level record.
+        contact = _find_blinx_contact_details(record.get("links"))
+        if contact:
+            contact_address = contact.get("street_address", "")
+            if contact_address:
+                c_street, c_city, c_state, c_zip = _split_blinx_contact_address(contact_address)
+                if c_city or c_state or c_zip:
+                    business["Street"] = c_street
+                    business["City"] = c_city
+                    business["State"] = c_state
+                    business["Zipcode"] = c_zip
+            if contact.get("email"):
+                business["Business Email"] = contact["email"]
+            if contact.get("website") and not business["Website URL"]:
+                business["Website URL"] = contact["website"]
+            if not business["Phone"] and (contact.get("phone_work") or contact.get("phone_mobile")):
+                business["Phone"] = contact.get("phone_work") or contact.get("phone_mobile")
+
+        # Fall back to the top-level record's email only if contact_details
+        # didn't supply one.
+        if not business["Business Email"]:
+            business["Business Email"] = record.get("email", "")
 
     # ---- Address: prefer the rendered DOM ----
     dom_address = _extract_blinx_address_from_dom(soup)
