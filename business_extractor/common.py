@@ -235,6 +235,63 @@ def _find_cf_email(soup):
 
     return ""
 
+
+# Tokens that signal "this is still part of the street, not the city"
+# when walking backward through an ambiguous "<street> <city>" run
+# (see _split_trailing_city below): unit/suite markers, street-type
+# suffixes, and directional abbreviations. Matched case-insensitively
+# against each token with trailing punctuation stripped.
+_STREET_SUFFIX_STOPWORDS = {
+    "st", "st.", "street", "ave", "ave.", "avenue", "blvd", "blvd.",
+    "boulevard", "dr", "dr.", "drive", "rd", "rd.", "road", "ln", "ln.",
+    "lane", "way", "ct", "ct.", "court", "pl", "pl.", "place", "pkwy",
+    "pkwy.", "parkway", "cir", "cir.", "circle", "hwy", "hwy.",
+    "highway", "ter", "ter.", "terrace", "trl", "trl.", "trail",
+    "n", "s", "e", "w", "ne", "nw", "se", "sw", "n.", "s.", "e.", "w.",
+    "suite", "ste", "ste.", "apt", "apt.", "unit", "#",
+}
+
+
+def _split_trailing_city(text):
+    """Best-effort split of a "<street> <city>" run that has NO comma
+    between the street and the city (e.g. "2244 Faraday Ave #206
+    Carlsbad") into (street, city).
+
+    Walks backward from the end of `text`, taking alphabetic,
+    capitalized-looking tokens as part of the city, and stops at the
+    first token that looks like it's still part of the street: a
+    number, a "#206"-style unit marker, or a street-type
+    suffix/direction ("Ave", "Blvd", "Suite", "N", ...).
+
+    Returns (text, "") -- i.e. nothing recovered, the whole run stays
+    "street" -- if no trailing city-like tokens are found (e.g. the
+    run really is just a street with no city attached). Returns
+    ("", text) if every token looked like part of a city (e.g. the
+    run is a bare city name like "Springfield" with no street at all).
+    """
+    tokens = text.split()
+    city_tokens = []
+    i = len(tokens) - 1
+    while i >= 0:
+        tok = tokens[i]
+        bare = tok.strip(".,").lower()
+        if not re.match(r"^[A-Za-z][A-Za-z'.-]*$", tok) or bare in _STREET_SUFFIX_STOPWORDS:
+            break
+        city_tokens.insert(0, tok)
+        i -= 1
+
+    if i < 0:
+        # Every token looked like part of a city name -- there's no
+        # street component to peel off.
+        return "", text
+    if not city_tokens:
+        return text, ""
+
+    street = " ".join(tokens[:i + 1])
+    city = " ".join(city_tokens)
+    return street, city
+
+
 def _split_blinx_address(address):
     street, city, state, zipcode = "", "", "", ""
 
@@ -245,7 +302,12 @@ def _split_blinx_address(address):
         city = parts[-2]
         state_zip = parts[-1]
     elif len(parts) == 2:
-        street = parts[0]
+        # parts[0] is often "<street> <city>" glued together with no
+        # comma between them (e.g. "2244 Faraday Ave #206 Carlsbad"),
+        # rather than being purely a street with no city. Try to peel
+        # a trailing city name off of it instead of dumping the whole
+        # thing into "street" and leaving city blank.
+        street, city = _split_trailing_city(parts[0])
         state_zip = parts[1]
     elif len(parts) == 1:
         state_zip = parts[0]
