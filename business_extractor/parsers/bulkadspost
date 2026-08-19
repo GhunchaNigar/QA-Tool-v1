@@ -89,7 +89,6 @@ def _split_street_address(street_address: str):
             rest = m2.group("rest").strip()
             # split rest into street / city on the last space-separated
             # capitalized word run — best effort only.
-            parts = rest.rsplit(" ", 1)
             street = rest
             city = ""
     return street, city, state, zipcode
@@ -184,8 +183,12 @@ def _extract_logo(soup: BeautifulSoup, jsonld: dict) -> str:
 # --------------------------------------------------------------------------
 # main parse function
 # --------------------------------------------------------------------------
+#
+# NOTE: dispatch.py calls every "requests"-method parser as parser(url, html),
+# and looks it up as parsers.bulkadspost.parse_bulkadspost. Both the name and
+# the argument order below match that convention.
 
-def bulkadspost(html: str, url: str = "") -> dict:
+def parse_bulkadspost(url: str, html: str) -> dict:
     soup = BeautifulSoup(html, "lxml")
     jsonld = _find_localbusiness_jsonld(soup) or {}
 
@@ -272,7 +275,7 @@ def bulkadspost(html: str, url: str = "") -> dict:
 def fetch_and_parse(url: str) -> dict:
     resp = requests.get(url, headers=HEADERS, timeout=30)
     resp.raise_for_status()
-    return parse_listing(resp.text, url)
+    return parse_bulkadspost(url, resp.text)
 
 
 # --------------------------------------------------------------------------
