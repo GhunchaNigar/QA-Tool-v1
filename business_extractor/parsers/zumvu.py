@@ -153,6 +153,18 @@ def parse_zumvu(url, html):
                 # e.g. "Dover, Delaware 19901, UNITED STATES"
                 business["City"] = lines[1]
 
+    # ---- Country fallback (visible map-marker line under the business
+    #      name, e.g. "USA" -- JSON-LD address.addressCountry is often
+    #      simply absent from this template's mainEntity block) ----
+    if not business["Country"]:
+        for li in soup.select("ul.profileaddrss li"):
+            icon = li.find("i")
+            if icon and "fa-map-marker" in icon.get("class", []):
+                country_text = clean(li.get_text())
+                if is_meaningful(country_text):
+                    business["Country"] = country_text
+                break
+
     # ---- Logo fallback (og:image) ----
     if not business["Logo"]:
         og_image = soup.find("meta", property="og:image")
@@ -176,8 +188,17 @@ def parse_zumvu(url, html):
         if crumbs:
             business["Category"] = crumbs[-1]
 
-    # ---- Social Media (real anchors, in case JSON-LD sameAs was empty) ----
-    for a in soup.find_all("a", href=True):
+    # ---- Social Media (real anchors, in case JSON-LD sameAs was empty)
+    #      Scoped to the business's own content column (#reslt /
+    #      .proleftcol). Scanning the whole page picks up Zumvu's own
+    #      corporate social accounts from the site header's
+    #      ".social-home" block (facebook.com/zumvu, twitter.com/zumvu,
+    #      pinterest.com/zumvu) and misattributes them to every listing
+    #      that has no real sameAs links of its own -- those accounts
+    #      don't contain "zumvu.com" in the href, so the existing
+    #      "zumvu.com not in href" filter doesn't catch them. ----
+    social_scope = soup.select_one("#reslt") or soup.select_one(".proleftcol") or soup
+    for a in social_scope.find_all("a", href=True):
         href = a["href"]
         for domain, network in SOCIAL_DOMAINS.items():
             if domain in href.lower() and "zumvu.com" not in href.lower():
