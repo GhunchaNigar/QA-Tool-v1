@@ -106,7 +106,7 @@ def _clean_text(el):
 
 # --- main parser ------------------------------------------------------------
 
-def parse_usa_globalbusinessdirectory(html, url=None):
+def parse_usaglobalbusinessdirectory(html, url=None):
     """
     Parse a usa.globalbusinessdirectory.us business listing page.
 
@@ -274,12 +274,3 @@ def parse_usa_globalbusinessdirectory(html, url=None):
     return data
 
 
-if __name__ == "__main__":
-    with open("/home/claude/sample.html", "r", encoding="utf-8") as f:
-        html = f.read()
-    result = parse_usa_globalbusinessdirectory(
-        html,
-        url="https://usa.globalbusinessdirectory.us/business/the-law-office-of-melinda-j-helbock-a-p-c/",
-    )
-    for k, v in result.items():
-        print(f"{k}: {v!r}")
