@@ -5,11 +5,38 @@ Site parser: blogs.globalbusinessdirectory.us
 from ..common import *  # noqa: F401,F403 -- see business_extractor/common.py
 
 
-
+# NOTE: posts on this site are inconsistent about which labels they
+# actually render:
+#   - the website field is sometimes labeled "Website" and sometimes
+#     "URL" -- both are listed here so either one is recognized as a
+#     section boundary (otherwise the un-recognized label's line, and
+#     everything after it up to the next KNOWN label, gets swallowed
+#     into the previous section instead -- e.g. "URL <link>" ending up
+#     appended to "Phone").
+#   - the "Owner Name" label is sometimes omitted entirely, with the
+#     name rendered as a bare, unlabeled first paragraph before
+#     "Address". See _leading_unlabeled_text() below for how that's
+#     recovered.
 _BLOGS_GBD_LABELS = [
-    "Owner Name", "Address", "Phone", "Website", "Business Email",
+    "Owner Name", "Address", "Phone", "Website", "URL", "Business Email",
     "About Us", "Related Searches",
 ]
+
+
+def _leading_unlabeled_text(description, labels):
+    """Text appearing before the first recognized label line in
+    `description`. Some posts open with the owner's bare name as the
+    very first paragraph and skip the "Owner Name" label entirely, so
+    that text never becomes a section in _band_description_sections()
+    -- there's no label to anchor it to, it just gets discarded as a
+    preamble. Returns the cleaned leading text, or "" if the block
+    starts with a label (nothing to recover) or is empty.
+    """
+    lines = description.split("\n")
+    for i, line in enumerate(lines):
+        if line.strip() in labels:
+            return clean("\n".join(lines[:i]))
+    return ""
 
 
 def parse_blogs_globalbusinessdirectory(url, html):
@@ -69,6 +96,12 @@ def parse_blogs_globalbusinessdirectory(url, html):
     # ---- Owner Name ----
     if sections.get("Owner Name"):
         business["Owner Name"] = sections["Owner Name"]
+    else:
+        # No "Owner Name" label on this post -- recover the bare name
+        # that precedes the first recognized label (e.g. "Address").
+        leading = _leading_unlabeled_text(description, _BLOGS_GBD_LABELS)
+        if is_meaningful(leading):
+            business["Owner Name"] = leading
 
     # ---- Address -> Street / City / State / Zipcode ----
     address = sections.get("Address", "")
@@ -84,8 +117,11 @@ def parse_blogs_globalbusinessdirectory(url, html):
         business["Phone"] = sections["Phone"]
 
     # ---- Website URL ----
+    # Labeled "Website" on some posts, "URL" on others -- check both.
     if sections.get("Website"):
         business["Website URL"] = sections["Website"]
+    elif sections.get("URL"):
+        business["Website URL"] = sections["URL"]
     if not business["Website URL"] and content_block:
         # Fallback for when the URL is rendered as a clickable <a> link
         # instead of plain text: grab the first outbound link in the
@@ -129,5 +165,3 @@ def parse_blogs_globalbusinessdirectory(url, html):
             business["Logo"] = urljoin(url, img["src"])
 
     return business
-
-
