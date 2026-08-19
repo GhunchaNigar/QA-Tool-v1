@@ -17,6 +17,21 @@ _SEARCHMYPRO_ADDRESS_RE = re.compile(
 # once that duplicate is removed.
 _TRAILING_STATE_NAME_RE = re.compile(r",\s*[A-Za-z][A-Za-z .]*$")
 
+# Fallback for listings where the source markup drops the comma between the
+# street and city (e.g. "2244 Faraday Ave #206 Carlsbad, CA 92008" instead
+# of the expected "2244 Faraday Ave #206, Carlsbad, CA 92008"). Only fires
+# when a suite/unit designator sits directly before the city, since that's
+# a reliable boundary to split on -- this avoids misparsing ordinary
+# multi-word street names that happen to lack a comma for some other
+# reason. Without this fallback, _SEARCHMYPRO_ADDRESS_RE never matches
+# (it requires two commas), and the caller falls back to dumping the
+# entire raw string into Street with City/State/Zipcode left empty.
+_SEARCHMYPRO_ADDRESS_NO_COMMA_RE = re.compile(
+    r"^(?P<street>.+?(?:#\S+|\bSuite\s+\S+|\bSte\.?\s+\S+|\bUnit\s+\S+|\bApt\.?\s+\S+))\s+"
+    r"(?P<city>[A-Za-z][A-Za-z .'\-]*?),\s*"
+    r"(?P<state>[A-Za-z][A-Za-z .]*?)\s+(?P<zip>\d{5}(?:-\d{4})?)$"
+)
+
 
 def _searchmypro_jsonld_local_business(soup):
     """Return the LocalBusiness object from the page's JSON-LD (handles
@@ -44,16 +59,21 @@ def _searchmypro_jsonld_local_business(soup):
 def _match_searchmypro_address(addr_text):
     """Match addr_text against _SEARCHMYPRO_ADDRESS_RE, retrying once with
     a trailing duplicated full-state-name segment stripped (see
-    _TRAILING_STATE_NAME_RE) if the first pass doesn't match."""
+    _TRAILING_STATE_NAME_RE) if the first pass doesn't match, and finally
+    falling back to _SEARCHMYPRO_ADDRESS_NO_COMMA_RE for listings whose
+    markup omits the comma between the street and city (see that regex's
+    docstring)."""
     match = _SEARCHMYPRO_ADDRESS_RE.match(addr_text)
     if match:
         return match
 
     stripped = _TRAILING_STATE_NAME_RE.sub("", addr_text)
     if stripped != addr_text:
-        return _SEARCHMYPRO_ADDRESS_RE.match(stripped)
+        match = _SEARCHMYPRO_ADDRESS_RE.match(stripped)
+        if match:
+            return match
 
-    return None
+    return _SEARCHMYPRO_ADDRESS_NO_COMMA_RE.match(addr_text)
 
 
 def parse_searchmypro(url, html):
@@ -135,6 +155,15 @@ def parse_searchmypro(url, html):
     #      ignore span 2 (it's a duplicate of the state already captured
     #      from span 1). The country is picked up separately by the
     #      trailing-text-node fallback further below.
+    #  (e) one <span> holding "Street City, State Zip" where the source
+    #      markup omits the comma that should separate the street from
+    #      the city, immediately after a suite/unit designator (e.g.
+    #      "2244 Faraday Ave #206 Carlsbad, CA 92008"). The primary
+    #      "Street, City, State Zip" regex requires two commas and never
+    #      matches this shape; _match_searchmypro_address falls back to
+    #      _SEARCHMYPRO_ADDRESS_NO_COMMA_RE to split it correctly instead
+    #      of dumping the whole string into Street (see that regex's
+    #      docstring).
     addr_container = soup.select_one(".overview-tab-the-member-address .col-sm-8")
     if addr_container:
         addr_spans = addr_container.find_all("span", recursive=False)
