@@ -1,3 +1,4 @@
+
 import json
 import re
 from bs4 import BeautifulSoup
@@ -105,7 +106,7 @@ def _clean_text(el):
 
 # --- main parser ------------------------------------------------------------
 
-def parse_globalbusinessdirectory_us(html, url=None):
+def parse_usa_globalbusinessdirectory(html, url=None):
     """
     Parse a usa.globalbusinessdirectory.us business listing page.
 
@@ -276,7 +277,7 @@ def parse_globalbusinessdirectory_us(html, url=None):
 if __name__ == "__main__":
     with open("/home/claude/sample.html", "r", encoding="utf-8") as f:
         html = f.read()
-    result = parse_globalbusinessdirectory_us(
+    result = parse_usa_globalbusinessdirectory(
         html,
         url="https://usa.globalbusinessdirectory.us/business/the-law-office-of-melinda-j-helbock-a-p-c/",
     )
