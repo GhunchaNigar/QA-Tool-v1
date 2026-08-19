@@ -1,20 +1,3 @@
-"""
-countrypwr.py
-Parser for countrypwr.com (Western Business Collective) business listing pages.
-
-Strategy:
-    1. Prefer the embedded schema.org JSON-LD (`LocalBusiness` / `ProfilePage`)
-       block — it's present on every listing and is the most structured source.
-    2. Fall back to direct DOM extraction for anything JSON-LD doesn't give us
-       cleanly (e.g. this site sets addressLocality/addressRegion/postalCode
-       to the literal string "N/A" and crams everything into streetAddress).
-    3. Address parsing has a dedicated fallback because countrypwr.com does NOT
-       put a comma between the street and the city — only before the state,
-       e.g. "2244 Faraday Ave #206 Carlsbad, CA 92008". A naive comma split
-       would incorrectly swallow the city into the street.
-
-Returns "N/A" for any field that can't be found.
-"""
 
 import json
 import re
@@ -138,7 +121,7 @@ def _parse_address(raw_address: str):
     return street, city, state, zipcode
 
 
-def parse(html: str, url: str = "") -> dict:
+def parse_countrypwr(html: str, url: str = "") -> dict:
     result = {field: NA for field in FIELDS}
     soup = BeautifulSoup(html, "html.parser")
 
@@ -250,14 +233,3 @@ def parse(html: str, url: str = "") -> dict:
     return result
 
 
-if __name__ == "__main__":
-    # Quick manual smoke test:
-    #   python countrypwr.py path/to/saved_page.html "https://www.countrypwr.com/legal-services/..."
-    import sys
-
-    if len(sys.argv) >= 2:
-        with open(sys.argv[1], "r", encoding="utf-8") as f:
-            page_html = f.read()
-        page_url = sys.argv[2] if len(sys.argv) >= 3 else ""
-        for k, v in parse(page_html, page_url).items():
-            print(f"{k:15s}: {v}")
