@@ -5,14 +5,22 @@ Site parser: vymaps.com
 from ..common import *  # noqa: F401,F403 -- see business_extractor/common.py
 
 
-
 def _vymaps_jsonld(soup):
-    """Return the first LocalBusiness JSON-LD object on the page, if any."""
+    """Return the first LocalBusiness JSON-LD object on the page, if any.
+
+    strict=False is required here: this template sometimes emits a raw,
+    unescaped newline inside a JSON string value (e.g. streetAddress
+    spanning "street\\ncity, state\\nzip" as literal line breaks rather
+    than "\\n" escapes). Strict-mode json.loads rejects control
+    characters inside strings and raises, which silently drops the
+    entire JSON-LD block -- including fields like addressCountry that
+    aren't rendered as visible page text anywhere else.
+    """
     for script in soup.find_all("script", type="application/ld+json"):
         if not script.string:
             continue
         try:
-            data = json.loads(script.string)
+            data = json.loads(script.string, strict=False)
         except Exception:
             continue
         candidates = data if isinstance(data, list) else [data]
@@ -20,6 +28,21 @@ def _vymaps_jsonld(soup):
             if isinstance(obj, dict) and obj.get("@type") == "LocalBusiness":
                 return obj
     return {}
+
+
+def _vymaps_split_camel_tag(tag):
+    """Insert spaces at CamelCase word boundaries.
+
+    This template sometimes glues an entire tag list into a single
+    hashtag with no delimiters at all, e.g.
+    "#PersonalInjuryLawyerCarAccidentLawyerSlipAndFallLawyerDogBiteLawyer".
+    There's no reliable way to recover which words belonged to which
+    original tag from that alone, but splitting on capital letters at
+    least turns it into a readable, space-separated string instead of
+    one unbroken run of words.
+    """
+    words = re.findall(r"[A-Z][a-z0-9]*|[a-z0-9]+", tag)
+    return " ".join(words) if words else tag
 
 
 def parse_vymaps(url, html):
@@ -40,23 +63,56 @@ def parse_vymaps(url, html):
     if not business["Business Name"] and jsonld.get("name"):
         business["Business Name"] = clean(jsonld["name"])
 
-    # ---- Address  ----
+    # ---- Address ----
     addr_link = soup.select_one("a.listing-address[href]")
     if addr_link:
-        addr_text = clean(addr_link.get_text())
-        if is_meaningful(addr_text):
-            street, city, state, zipcode = _split_blinx_address(addr_text)
-            business["Street"] = street
-            business["City"] = city
-            business["State"] = state
-            business["Zipcode"] = zipcode
+        # This template renders the address as three literal lines --
+        # street / "city, state" / zip -- separated by real newlines.
+        # Grabbing the raw text (before clean() collapses whitespace)
+        # lets us split on that structure directly instead of guessing
+        # from a generic comma-split, which has no way to tell the city
+        # apart from the rest of the street once the newlines are gone.
+        raw_addr = addr_link.get_text()
+        lines = [clean(line) for line in raw_addr.split("\n")]
+        lines = [l for l in lines if l]
+
+        if len(lines) >= 3:
+            business["Street"] = lines[0]
+            business["Zipcode"] = lines[-1]
+            city_state = lines[1]
+            if "," in city_state:
+                city_part, state_part = city_state.split(",", 1)
+                business["City"] = clean(city_part)
+                business["State"] = clean(state_part)
+            else:
+                business["City"] = city_state
+        else:
+            addr_text = clean(raw_addr)
+            if is_meaningful(addr_text):
+                street, city, state, zipcode = _split_blinx_address(addr_text)
+                business["Street"] = street
+                business["City"] = city
+                business["State"] = state
+                business["Zipcode"] = zipcode
+
         if _is_maps_link(addr_link["href"]):
             business["GBP Link"] = addr_link["href"]
 
-    # ---- Country (JSON-LD only; never rendered as visible page text) ----
-    addr_obj = jsonld.get("address")
-    if isinstance(addr_obj, dict) and addr_obj.get("addressCountry"):
-        business["Country"] = clean(addr_obj["addressCountry"])
+    # ---- Country ----
+    # Prefer the rendered "Places list in <country>" link (globe icon,
+    # e.g. "United States") over JSON-LD's raw two-letter addressCountry
+    # code -- it's what's actually shown on the page, and it doesn't
+    # depend on the JSON-LD block having parsed successfully.
+    country_icon = soup.select_one(".profile-cover-content .cover-buttons i.fa-globe")
+    if country_icon and country_icon.parent:
+        country_text = clean(country_icon.parent.get_text())
+        if is_meaningful(country_text):
+            business["Country"] = country_text
+
+    if not business["Country"]:
+        addr_obj = jsonld.get("address")
+        if isinstance(addr_obj, dict) and addr_obj.get("addressCountry"):
+            business["Country"] = clean(addr_obj["addressCountry"])
 
     # ---- Phone ----
     tel = soup.select_one('a[href^="tel:"]')
@@ -89,10 +145,13 @@ def parse_vymaps(url, html):
             if tags_match:
                 tags_text = tags_match.group(1).strip()
                 if is_meaningful(tags_text):
-                    business["Keywords"] = ", ".join(
+                    raw_tags = [
                         tag.lstrip("#").strip()
                         for tag in tags_text.split()
                         if tag.lstrip("#").strip()
+                    ]
+                    business["Keywords"] = ", ".join(
+                        _vymaps_split_camel_tag(tag) for tag in raw_tags
                     )
                 continue
             if i == 0:
@@ -112,7 +171,7 @@ def parse_vymaps(url, html):
         if is_meaningful(cat_text):
             business["Category"] = cat_text
 
-    # ---- Photos  ----
+    # ---- Photos ----
     photos = []
     for img in soup.select("ul.gallery-list img[src]"):
         if not img.get("src"):
@@ -124,5 +183,3 @@ def parse_vymaps(url, html):
         business["Photos"] = photos
 
     return business
-
-
