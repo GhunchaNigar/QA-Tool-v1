@@ -28,6 +28,24 @@ _LOCUUL_CITY_STATE_ZIP_RE = re.compile(
     r"^(?P<city>.+?)\s+(?P<state>[A-Za-z]{2})\s*,\s*(?P<zip>\d{5}(?:-\d{4})?)$"
 )
 
+# Matches "Street City, State Zip" -- listings where the source markup
+# drops the comma that should separate the street from the city,
+# immediately after a suite/unit designator (e.g. "2244 Faraday Ave #206
+# Carlsbad, CA 92008" instead of "2244 Faraday Ave #206, Carlsbad, CA
+# 92008"). _LOCUUL_ADDRESS_RE requires two commas and never matches this
+# shape (there's only one, between city and state); this previously fell
+# through all the way to the raw-string fallback, dumping the entire
+# address into Street with City/State/Zipcode left blank. Only fires when
+# a suite/unit designator sits directly before the city, since that's a
+# reliable boundary to split on -- this avoids misparsing ordinary
+# multi-word street names that happen to lack a comma for some other
+# reason.
+_LOCUUL_ADDRESS_NO_STREET_COMMA_RE = re.compile(
+    r"^(?P<street>.+?(?:#\S+|\bSuite\s+\S+|\bSte\.?\s+\S+|\bUnit\s+\S+|\bApt\.?\s+\S+))\s+"
+    r"(?P<city>[A-Za-z][A-Za-z .'\-]*?),\s*"
+    r"(?P<state>[A-Za-z][A-Za-z .]*?)\s+(?P<zip>\d{5}(?:-\d{4})?)$"
+)
+
 
 def parse_locuul(url, html):
 
@@ -67,13 +85,20 @@ def parse_locuul(url, html):
                     business["State"] = clean(match.group("state"))
                     business["Zipcode"] = match.group("zip")
                 else:
-                    city_state_zip_match = _LOCUUL_CITY_STATE_ZIP_RE.match(addr_text)
-                    if city_state_zip_match:
-                        business["City"] = clean(city_state_zip_match.group("city"))
-                        business["State"] = clean(city_state_zip_match.group("state"))
-                        business["Zipcode"] = city_state_zip_match.group("zip")
+                    no_street_comma_match = _LOCUUL_ADDRESS_NO_STREET_COMMA_RE.match(addr_text)
+                    if no_street_comma_match:
+                        business["Street"] = clean(no_street_comma_match.group("street"))
+                        business["City"] = clean(no_street_comma_match.group("city"))
+                        business["State"] = clean(no_street_comma_match.group("state"))
+                        business["Zipcode"] = no_street_comma_match.group("zip")
                     else:
-                        business["Street"] = addr_text
+                        city_state_zip_match = _LOCUUL_CITY_STATE_ZIP_RE.match(addr_text)
+                        if city_state_zip_match:
+                            business["City"] = clean(city_state_zip_match.group("city"))
+                            business["State"] = clean(city_state_zip_match.group("state"))
+                            business["Zipcode"] = city_state_zip_match.group("zip")
+                        else:
+                            business["Street"] = addr_text
 
         trailing_text_nodes = [
             clean(node) for node in addr_container.contents
@@ -202,5 +227,3 @@ def parse_locuul(url, html):
         business["GBP Link"] = directions["href"]
 
     return business
-
-
