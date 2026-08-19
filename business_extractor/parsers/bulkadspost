@@ -185,7 +185,7 @@ def _extract_logo(soup: BeautifulSoup, jsonld: dict) -> str:
 # main parse function
 # --------------------------------------------------------------------------
 
-def parse_listing(html: str, url: str = "") -> dict:
+def bulkadspost(html: str, url: str = "") -> dict:
     soup = BeautifulSoup(html, "lxml")
     jsonld = _find_localbusiness_jsonld(soup) or {}
 
