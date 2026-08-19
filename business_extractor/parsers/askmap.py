@@ -52,6 +52,24 @@ def parse_askmap(url, html):
         if og_title and og_title.get("content"):
             business["Business Name"] = clean(og_title["content"]).split("|")[0].strip()
 
+    # ---- Country ----
+    # Rendered right under the <h1> as "in <a href=".../map.asp?...&city=X&
+    # country=Y">City, Country</a>". The href's `country` query param is
+    # more reliable than the link text (which can contain extra commas in
+    # multi-part city names), so prefer that and fall back to the last
+    # comma-separated piece of the visible text.
+    map_link = soup.select_one('a[href*="map.asp"][href*="country="]')
+    if map_link:
+        href = map_link.get("href", "")
+        query = parse_qs(urlparse(href).query)
+        country_vals = query.get("country")
+        if country_vals and clean(country_vals[0]):
+            business["Country"] = clean(country_vals[0])
+        else:
+            link_text = clean(map_link.get_text())
+            if "," in link_text:
+                business["Country"] = link_text.split(",")[-1].strip()
+
     # ---- Category ("<b>Category</b>: <span>value</span>" --
     for b_tag in soup.find_all("b"):
         if clean(b_tag.get_text()).lower() == "category":
