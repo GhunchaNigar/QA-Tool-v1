@@ -14,7 +14,7 @@ import re
 import openpyxl
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
-from fields_config import ALL_FIELDS, SOURCE_FIELDS
+from fields_config import ALL_FIELDS, SOURCE_FIELDS, VISUAL_FIELDS
 
 # ── Color fills ───────────────────────────────────────────────────────────────
 FILL_RED           = PatternFill("solid", fgColor="FF0000")
@@ -232,7 +232,16 @@ def _fields_allowed_for_source(source: str):
     return None  # None = no restriction, every field allowed
 
 
-def _write_extracted_sheet(ws, extracted_list: list, url_to_source: dict):
+def _write_extracted_sheet(ws, extracted_list: list, url_to_source: dict, user_data: dict = None):
+    """
+    user_data : the dict of values the user typed into the form. When a
+    field was left blank on the form, that field is shown as "N/A" on
+    this sheet too — mirroring the same "blank input -> N/A" rule the
+    Comparison sheet already applies (see comparator.compare_row).
+    Visual fields (Logo/Photos) are exempt, since they're graded on
+    presence alone and have no user-typed value to be "blank".
+    """
+    user_data = user_data or {}
     headers = ["Source", "Live Link", "Status"] + ALL_FIELDS
     _write_header_row(ws, headers, status_col_header="Status")
 
@@ -248,10 +257,16 @@ def _write_extracted_sheet(ws, extracted_list: list, url_to_source: dict):
             "SCRAPE ERROR" if scrape_error else "OK",
         ]
         for field in ALL_FIELDS:
+            user_val = str(user_data.get(field, "")).strip()
+
             if allowed is not None and field not in allowed:
                 value = "N/A"
             elif scrape_error:
                 value = "SCRAPE ERROR"
+            elif field not in VISUAL_FIELDS and not user_val:
+                # User left this field blank on the form -> N/A, regardless
+                # of whether the page happened to have a value.
+                value = "N/A"
             else:
                 raw = row.get(field, "")
                 value = raw if raw not in (None, "") else "MISSING"
@@ -293,7 +308,7 @@ def write_excel(results: list, extracted_list: list = None, user_data: dict = No
 
     ws_extracted = wb.create_sheet("Extracted Data")
     url_to_source = {r.get("Live Link", ""): r.get("Source", "unknown") for r in (results or [])}
-    _write_extracted_sheet(ws_extracted, extracted_list or [], url_to_source)
+    _write_extracted_sheet(ws_extracted, extracted_list or [], url_to_source, user_data)
 
     buf = io.BytesIO()
     wb.save(buf)
