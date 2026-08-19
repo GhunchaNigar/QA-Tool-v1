@@ -62,7 +62,7 @@ SITE_PARSERS = {
     "meetyourmarkets.com": ("requests", parsers.meetyourmarkets.parse_meetyourmarkets),
     "bulkadspost.com": ("requests", parsers.bulkadspost.parse_bulkadspost),
     "bizcoupon.directory": ("requests", parsers.bizcoupon.parse_bizcoupon),
-    "countrypwr.com": ("requests", parsers.meetyourmarkets.parse_countrypwr),
+    "countrypwr.com": ("requests", parser.countrypwr.parse_countrypwr),
     "homify.com": ("requests", parsers.homify.parse_homify),
     "cake.me": ("requests", parsers.cake.parse_cake),
     "perrysplacepromotions.org": ("requests", parsers.perrysplacepromotions.parse_perrysplacepromotions),
