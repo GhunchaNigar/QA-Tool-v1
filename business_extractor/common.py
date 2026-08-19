@@ -321,6 +321,19 @@ def _split_blinx_address(address):
     else:
         state = state_zip.strip()
 
+    # Defensive fallback: if the state/zip regex above didn't match
+    # (state_zip was empty, or shaped in some way we don't otherwise
+    # handle -- e.g. a comma-free address, or trailing junk after the
+    # zip like "CA 92008 USA" that isn't already covered), don't just
+    # silently drop the zip code. Scan the ORIGINAL address string for
+    # a standalone 5-digit (optionally +4) run and use that as a last
+    # resort, so a zip is never lost purely because the rest of the
+    # address didn't fit one of the shapes above.
+    if not zipcode:
+        zip_match = re.search(r"\b(\d{5}(?:-\d{4})?)\b", address)
+        if zip_match:
+            zipcode = zip_match.group(1)
+
     return street, city, state, zipcode
 
 
