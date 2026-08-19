@@ -37,7 +37,9 @@ def parse_vetslist(url, html):
     #   2) Others (e.g. WrightWay Emergency Services) instead put the
     #      *entire* address -- street, city, state, and zip -- into a
     #      single itemprop="streetAddress" span (e.g. "300 Triple Diamond
-    #      Blvd ,Nokomis, FL 34275") with nothing else in the block.
+    #      Blvd ,Nokomis, FL 34275") with nothing else in the block. This
+    #      shape has NO country text after its <br/> -- it lives in a
+    #      separate header line instead (see the Country fallback below).
     #   3) Others still (e.g. Valley Exteriors) put the *entire* address
     #      into the itemprop="addressLocality" span itself (e.g.
     #      "1883 N Silverspring Dr, Appleton, WI 54913"), with no separate
@@ -108,6 +110,27 @@ def parse_vetslist(url, html):
             country_text = clean(str(br.next_sibling))
             if is_meaningful(country_text):
                 business["Country"] = country_text
+
+    # ---- Country (fallback) ----
+    # Shape 2 listings (see the Address comment above) have no country text
+    # inside the itemprop="address" block at all -- the <br/> there is
+    # followed immediately by the closing </li>, so the lookup above finds
+    # nothing. On those listings the country instead lives in the profile
+    # header, in a "<category><br/><country>" line right under the business
+    # name/h1, e.g.:
+    #   <p class="line-height-xl nomargin">
+    #       Legal, Community & Education<br />United States of America
+    #   </p>
+    # Only used as a fallback so it never overrides a country already found
+    # in the address block itself.
+    if not is_meaningful(business["Country"]):
+        header_line = soup.select_one("p.line-height-xl")
+        if header_line:
+            header_br = header_line.find("br")
+            if header_br and header_br.next_sibling:
+                country_text = clean(str(header_br.next_sibling))
+                if is_meaningful(country_text):
+                    business["Country"] = country_text
 
     # ---- Category (breadcrumb crumb right before the current-page
     # business name; "Home"/root crumbs are excluded) ----
