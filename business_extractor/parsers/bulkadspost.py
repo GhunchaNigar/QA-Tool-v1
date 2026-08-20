@@ -94,6 +94,26 @@ def _split_street_address(street_address: str):
     return street, city, state, zipcode
 
 
+def _strip_duplicated_city(street: str, city: str) -> str:
+    """
+    GeoDirectory sometimes bakes the city onto the end of
+    postalAddress.streetAddress (e.g. "2244 Faraday Ave #206 Carlsbad")
+    even when addressLocality/addressRegion/postalCode are ALSO already
+    populated separately and correctly. In that case the old logic never
+    ran _split_street_address at all (it's gated on city/state/zip being
+    *missing*), so the duplicated city passed straight through into
+    Street untouched. This runs unconditionally whenever we already know
+    the city, regardless of whether state/zip are present, and trims a
+    trailing occurrence of it (plus any trailing comma/whitespace) off
+    of street.
+    """
+    if not street or not city:
+        return street
+    pattern = re.compile(re.escape(city) + r"\s*,?\s*$", re.IGNORECASE)
+    trimmed = pattern.sub("", street).strip().rstrip(",").strip()
+    return trimmed or street
+
+
 def _decode_obfuscated_email(soup: BeautifulSoup) -> str:
     """
     GeoDirectory hides emails behind an onclick handler like:
@@ -180,6 +200,52 @@ def _extract_logo(soup: BeautifulSoup, jsonld: dict) -> str:
     return ""
 
 
+def _extract_business_title(soup: BeautifulSoup) -> str:
+    """
+    Find the listing's own title, trying progressively more generic
+    selectors and only accepting a match if it actually has non-empty
+    text. A bare "h1" selector alone (the previous approach) grabs the
+    FIRST <h1> anywhere on the page in document order -- on most WP
+    themes that's the site logo/branding in the header, not the listing
+    title, and it's frequently empty or icon-only, silently producing a
+    blank Name. Trying specific, listing-scoped selectors first avoids
+    that; "h1" stays as a last-resort fallback.
+    """
+    for sel in (
+        ".single-post-title",
+        ".geodir-title",
+        ".geodir_post_meta.geodir-field-post_title",
+        ".entry-title",
+        "article h1",
+        "main h1",
+        "h1",
+    ):
+        node = soup.select_one(sel)
+        if node:
+            text = _clean(node.get_text())
+            if text:
+                return text
+    return ""
+
+
+def _extract_title_from_html_title_tag(soup: BeautifulSoup) -> str:
+    """
+    Last-resort fallback for the business name. The <title> tag on these
+    listing-directory pages conventionally reads
+    "<Business Name> - <Site Name>" (or "| <Site Name>"); split on the
+    LAST such separator and keep everything before it, since the
+    business name is always the leading part in that convention.
+    """
+    title_tag = soup.find("title")
+    if not title_tag:
+        return ""
+    text = _clean(title_tag.get_text())
+    if not text:
+        return ""
+    parts = re.split(r"\s+[-|]\s+(?!.*\s+[-|]\s+)", text)
+    return _clean(parts[0]) if parts else text
+
+
 # --------------------------------------------------------------------------
 # main parse function
 # --------------------------------------------------------------------------
@@ -193,9 +259,10 @@ def parse_bulkadspost(url: str, html: str) -> dict:
     jsonld = _find_localbusiness_jsonld(soup) or {}
 
     # ---- Name -------------------------------------------------------
-    name = _clean(jsonld.get("name")) or _clean(
-        soup.select_one("h1, .single-post-title") and
-        soup.select_one("h1, .single-post-title").get_text()
+    name = (
+        _clean(jsonld.get("name"))
+        or _extract_business_title(soup)
+        or _extract_title_from_html_title_tag(soup)
     )
 
     # ---- Address ------------------------------------------------------
@@ -205,6 +272,11 @@ def parse_bulkadspost(url: str, html: str) -> dict:
     state = _clean(addr.get("addressRegion", ""))
     zipcode = _clean(addr.get("postalCode", ""))
     country = _clean(addr.get("addressCountry", ""))
+
+    if street and city:
+        # Runs unconditionally (not just when city/state/zip are
+        # missing) -- see _strip_duplicated_city docstring.
+        street = _strip_duplicated_city(street, city)
 
     if street and (not zipcode or not city or not state):
         s2, c2, st2, z2 = _split_street_address(street)
