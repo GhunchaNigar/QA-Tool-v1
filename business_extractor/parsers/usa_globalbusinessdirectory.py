@@ -1,4 +1,3 @@
-
 import json
 import re
 from bs4 import BeautifulSoup
@@ -19,39 +18,16 @@ _UNIT_TOKEN_RE = re.compile(
 
 
 def _split_combined_street_city(pre_comma_text):
-    """
-    Split a combined "<street> <city>" string (no comma between them) into
-    (street, city).
-
-    This theme stores the full address as ONE free-text string
-    ("2244 Faraday Ave #206 Carlsbad, CA 92008") with no structured
-    street/city/state/zip fields behind it, so there's no reliable way to
-    split street from city other than heuristics. Strategy, in order:
-
-      1. If a unit/suite token (#206, Suite 4, Apt B, ...) appears, treat
-         everything up to and including the unit's value as the street and
-         everything after it as the city. This is the common case for
-         suite-numbered offices like this listing.
-      2. Otherwise, if a street-type suffix word (Ave, St, Blvd, ...)
-         appears, treat everything up to and including that suffix as the
-         street and everything after it as the city.
-      3. Otherwise, fall back to treating the last word as the city and the
-         rest as the street (weak fallback for addresses this heuristic
-         doesn't recognize — flag such cases for manual review).
-    """
     tokens = pre_comma_text.split()
     if not tokens:
         return "", ""
 
-    # Case 1: unit/suite token, e.g. "... Ave #206 Carlsbad" or
-    # "... Ave Suite 206 Carlsbad"
     for i, tok in enumerate(tokens):
         if _UNIT_TOKEN_RE.match(tok):
             end = i + 1
-            # "Suite 206" / "Unit B" / "Apt 4" — swallow the value token too
             if (
                 end < len(tokens)
-                and not _UNIT_TOKEN_RE.match(tok)  # tok itself isn't "#206"-style
+                and not _UNIT_TOKEN_RE.match(tok)
                 and re.match(r"^#?\w+$", tokens[end])
                 and tok.lower() in ("suite", "ste.", "ste", "unit", "apt", "apt.", "no", "no.")
             ):
@@ -61,8 +37,6 @@ def _split_combined_street_city(pre_comma_text):
             if city:
                 return street, city
 
-    # Case 2: street-suffix word (walk backwards so we catch the *last*
-    # suffix occurrence, closest to the city name)
     for i in range(len(tokens) - 1, -1, -1):
         if _STREET_SUFFIX_RE.match(tokens[i].strip(".")):
             street = " ".join(tokens[: i + 1])
@@ -70,24 +44,16 @@ def _split_combined_street_city(pre_comma_text):
             if city:
                 return street, city
 
-    # Case 3: weak fallback
     if len(tokens) > 1:
         return " ".join(tokens[:-1]), tokens[-1]
     return pre_comma_text, ""
 
 
 def _split_full_address(address_text):
-    """
-    Split "<street> <city>, <ST> <zipcode>" into
-    (street, city, state, zipcode).
-
-    Returns ("", "", "", "") if the trailing ", ST ZIP" pattern isn't found
-    at all (rather than guessing).
-    """
     if not address_text:
         return "", "", "", ""
 
-    address_text = " ".join(address_text.split())  # collapse whitespace
+    address_text = " ".join(address_text.split())
 
     m = re.match(
         r"^(?P<pre>.+),\s*(?P<state>[A-Za-z]{2})\s+(?P<zip>\d{5}(?:-\d{4})?)$",
@@ -101,23 +67,33 @@ def _split_full_address(address_text):
 
 
 def _clean_text(el):
-    return el.get_text(strip=True) if el else None
+    # separator=" " -- several blocks on this theme (notably the
+    # description) are more than one child tag (e.g. multiple <p>s);
+    # without a separator, get_text(strip=True) runs their text together
+    # with no space between them.
+    return el.get_text(" ", strip=True) if el else None
 
 
-# --- main parser ------------------------------------------------------------
-
-def parse_usaglobalbusinessdirectory(html, url=None):
-    """
-    Parse a usa.globalbusinessdirectory.us business listing page.
-
-    Returns a dict with: Name, Owner Name, Street, City, State, Zipcode,
-    Country, Phone, Website URL, Description, Hours, Social Media Links,
-    Business Email, Category.
-    """
+def parse_usaglobalbusinessdirectory(url, html):
+    # NOTE: (url, html) -- matching the calling convention every other
+    # parse_<site>(url, html) function in this codebase uses. This was
+    # previously declared as (html, url=None), i.e. swapped. The harness
+    # calls every site parser positionally as parse_<site>(url, html),
+    # so that swap meant `html` was silently bound to the page URL
+    # string and `url` to the real HTML. BeautifulSoup(html, ...) then
+    # parsed a bare URL as markup -- which has no tags at all -- so every
+    # selector below returned None/empty, matching the "everything is
+    # blank" symptom exactly (same root cause as the cities.* parser).
     soup = BeautifulSoup(html, "html.parser")
 
     data = {
-        "Name": None,
+        # NOTE: key must be "Business Name", not "Name" -- every other
+        # site parser in this codebase (see empty_business() in
+        # common.py) returns the business name under "Business Name".
+        # A mismatched key here means the harness's downstream
+        # merge/normalization step would silently drop this field even
+        # once the argument-order bug above is fixed.
+        "Business Name": None,
         "Owner Name": None,
         "Street": None,
         "City": None,
@@ -133,7 +109,6 @@ def parse_usaglobalbusinessdirectory(html, url=None):
         "Category": None,
     }
 
-    # --- JSON-LD LocalBusiness block (preferred source where it applies) ---
     ld = None
     for script in soup.find_all("script", type="application/ld+json"):
         try:
@@ -145,36 +120,32 @@ def parse_usaglobalbusinessdirectory(html, url=None):
             break
 
     if ld:
-        data["Name"] = ld.get("name")
+        data["Business Name"] = ld.get("name")
         data["Phone"] = ld.get("telephone")
         data["Business Email"] = ld.get("email")
         if ld.get("description"):
+            # separator=" " -- the description is often multiple <p> tags
+            # (e.g. "...San Diego residents</p><p>recover compensation...");
+            # get_text(strip=True) alone has no separator between them and
+            # runs the paragraphs together with no space.
             data["Description"] = BeautifulSoup(
                 ld["description"], "html.parser"
-            ).get_text(strip=True)
-        # ld["address"]["address"] is a combined free-text string (non-
-        # standard schema.org for this theme) — parsed below alongside the
-        # HTML fallback so we only write the splitting logic once.
+            ).get_text(" ", strip=True)
         ld_address_text = None
         if isinstance(ld.get("address"), dict):
             ld_address_text = ld["address"].get("address")
     else:
         ld_address_text = None
 
-    # --- Name (HTML fallback / cross-check) ---
-    if not data["Name"]:
-        data["Name"] = _clean_text(soup.select_one("h1.case27-primary-text"))
+    if not data["Business Name"]:
+        data["Business Name"] = _clean_text(soup.select_one("h1.case27-primary-text"))
 
-    # --- Description (HTML fallback) ---
     if not data["Description"]:
         desc_el = soup.select_one(
             ".block-type-text.block-field-job_description .pf-body"
         )
         data["Description"] = _clean_text(desc_el)
 
-    # --- Contact Information block: email / phone / website ---
-    # Icons (mi email / mi phone / mi web) identify each line; text lives in
-    # the following <span>.
     for li in soup.select(".block-type-details .details-block-content li"):
         icon = li.find("i")
         span = li.find("span")
@@ -189,34 +160,22 @@ def parse_usaglobalbusinessdirectory(html, url=None):
         elif "web" in icon_classes:
             data["Website URL"] = value
 
-    # Website URL fallback: the "Website" CTA button near the top of the
-    # page, if the contact-info block didn't have one.
     if not data["Website URL"]:
         cta = soup.select_one('.lmb-calltoaction a[href]:not([href^="tel:"])')
         if cta:
             data["Website URL"] = cta["href"]
 
-    # --- Category ---
     data["Category"] = _clean_text(
         soup.select_one(".block-type-categories .category-name")
     )
 
-    # --- Region / Country ---
-    # The theme labels this block "Region" but it holds the country
-    # (e.g. "United States"), linked via /region/<slug>/.
     country_el = soup.select_one(".block-type-terms .details-list li a span")
     data["Country"] = _clean_text(country_el)
 
-    # --- Owner Name (best-effort; see module docstring caveat) ---
     data["Owner Name"] = _clean_text(
         soup.select_one(".block-type-author .host-name")
     )
 
-    # --- Address: prefer the combined string surfaced in the map block's
-    # data-options JSON (identical to what's in the visible address <p>,
-    # but avoids relying on exact whitespace in the rendered HTML). Fall
-    # back to the visible <p> text if the map JSON isn't present or
-    # unparsable.
     address_text = ld_address_text
     if not address_text:
         map_el = soup.select_one(".c27-map[data-options]")
@@ -237,20 +196,10 @@ def parse_usaglobalbusinessdirectory(html, url=None):
     data["State"] = state or None
     data["Zipcode"] = zipcode or None
 
-    # --- Hours (only present on listings that set them; selector matches
-    # the same block-type used on the sibling listings.* site) ---
     hours_el = soup.select_one(".block-type-work_hours .pf-body")
     if hours_el:
         data["Hours"] = _clean_text(hours_el)
 
-    # --- Social Media Links ---
-    # IMPORTANT: exclude #social-share-modal — that's the generic
-    # site-wide "share this listing" widget (Facebook/X/WhatsApp/LinkedIn/
-    # Mail), not the business's own social accounts. Only look inside the
-    # business's own content blocks (main profile columns) for genuine
-    # outbound social links, and only for real social platforms — the
-    # contact-info "Website" link is excluded since it's already captured
-    # as Website URL.
     social_domains = (
         "facebook.com",
         "instagram.com",
@@ -272,5 +221,3 @@ def parse_usaglobalbusinessdirectory(html, url=None):
     data["Social Media Links"] = social_links
 
     return data
-
-
