@@ -77,8 +77,8 @@ def split_address(full_address: str):
 
     addr = clean(full_address)
 
-    # Pattern: "<street>, <state?> <city>, <ST> <ZIP>" — the common
-    # "<everything>, <City>, <ST> <ZIP[-XXXX]>" shape.
+    # Pattern: "<street>, <city>, <ST> <ZIP>" — the "<everything>, <City>,
+    # <ST> <ZIP[-XXXX]>" shape, with a comma separating street and city.
     m = re.search(
         r"^(?P<street>.*?),\s*(?P<city>[A-Za-z .'\-]+?),\s*"
         r"(?P<state>[A-Za-z]{2})\s+(?P<zip>\d{5}(?:-\d{4})?)\s*$",
@@ -137,7 +137,21 @@ def extract_social_links(soup):
     return sorted(links)
 
 
-def parse_citiesglobalbusinessdirectory(html: str, source_url: str = None) -> dict:
+def parse_citiesglobalbusinessdirectory(url, html):
+    # NOTE: argument order is (url, html) -- matching the calling
+    # convention used by every other parse_<site>(url, html) function in
+    # this codebase (see e.g. parse_listings_globalbusinessdirectory).
+    # This function previously declared its signature as
+    # (html, source_url=None), i.e. swapped. Since the harness calls
+    # every site parser positionally as parse_<site>(url, html), that
+    # swap meant `html` was silently bound to the page URL string and
+    # `source_url` to the actual HTML. BeautifulSoup(html, "lxml") then
+    # parsed a bare URL as if it were markup -- which contains no tags
+    # at all -- so soup came back essentially empty and every single
+    # select_one() below returned None. That's why *all* fields came
+    # back blank rather than just the ones with a selector bug: nothing
+    # ever failed loudly, it just had no real HTML to search.
+    source_url = url
     soup = BeautifulSoup(html, "lxml")
     ld = extract_json_ld(soup) or {}
 
@@ -204,7 +218,10 @@ def scrape(source: str) -> dict:
     """Convenience wrapper: fetch (URL or local path) + parse in one call."""
     html = fetch_html(source)
     source_url = source if source.startswith("http") else None
-    return parse_listing(html, source_url=source_url)
+    # Fixed: was calling the undefined name `parse_listing(...)`; the
+    # function actually defined in this module is
+    # `parse_citiesglobalbusinessdirectory`, called (url, html).
+    return parse_citiesglobalbusinessdirectory(source_url, html)
 
 
 def main(argv):
@@ -215,10 +232,14 @@ def main(argv):
     results = []
     for source in argv[1:]:
         html = fetch_html(source)
-        record = parse_listing(html, source_url=source if source.startswith("http") else None)
+        source_url = source if source.startswith("http") else None
+        # Fixed: same undefined-function-name bug as scrape() above,
+        # plus corrected argument order to (url, html).
+        record = parse_citiesglobalbusinessdirectory(source_url, html)
         results.append(record)
 
     print(json.dumps(results, indent=2, ensure_ascii=False))
 
 
-
+if __name__ == "__main__":
+    main(sys.argv)
