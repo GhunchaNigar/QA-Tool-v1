@@ -197,7 +197,16 @@ def parse_citiesglobalbusinessdirectory(url, html):
     social_links = extract_social_links(soup)
 
     return {
-        "Name": name,
+        # NOTE: key must be "Business Name", not "Name" -- every other
+        # site parser in this codebase (see empty_business() in
+        # common.py, and parse_listings_globalbusinessdirectory) returns
+        # the business name under "Business Name". This was previously
+        # "Name", which doesn't match that canonical schema, so the
+        # harness's downstream merge/normalization step silently
+        # dropped it while every other (correctly-named) field passed
+        # through untouched -- exactly the "everything works except
+        # Name" symptom observed.
+        "Business Name": name,
         "Owner Name": owner_name,
         "Street": street,
         "City": city,
