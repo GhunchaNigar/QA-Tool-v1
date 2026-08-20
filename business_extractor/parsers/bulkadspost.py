@@ -8,7 +8,7 @@ import requests
 from bs4 import BeautifulSoup
 
 FIELDS = [
-    "Name", "Street", "City", "State", "Zipcode", "Country",
+    "Business Name", "Street", "City", "State", "Zipcode", "Country",
     "Phone", "Website URL", "Keywords", "Description", "Hours",
     "Business Email", "Category", "Logo",
 ]
@@ -204,14 +204,29 @@ def _extract_business_title(soup: BeautifulSoup) -> str:
     """
     Find the listing's own title, trying progressively more generic
     selectors and only accepting a match if it actually has non-empty
-    text. A bare "h1" selector alone (the previous approach) grabs the
-    FIRST <h1> anywhere on the page in document order -- on most WP
-    themes that's the site logo/branding in the header, not the listing
-    title, and it's frequently empty or icon-only, silently producing a
-    blank Name. Trying specific, listing-scoped selectors first avoids
-    that; "h1" stays as a last-resort fallback.
+    text.
+
+    Two things were added to the original selector list:
+
+    1. `[itemprop=name]` and GeoDirectory-specific classes
+       (`.geodir-entry-title`, `.gd-title`, `.listing-title`,
+       `.geodir_post_meta.geodir-field-post_title`). The original list
+       only covered `.single-post-title` / `.geodir-title`, which are
+       from a *different* GeoDirectory theme skin than bulkadspost.com
+       actually uses -- so on this site every selector in the old list
+       missed, silently falling through to the (also failing) bare "h1"
+       catch-all.
+    2. A bare "h1" selector alone (still kept as the final fallback)
+       grabs the FIRST <h1> anywhere on the page in document order --
+       on most WP themes that's the site logo/branding in the header,
+       not the listing title, and it's frequently empty or icon-only.
+       Trying specific, listing-scoped selectors first avoids that.
     """
     for sel in (
+        "[itemprop=name]",
+        ".geodir-entry-title",
+        ".gd-title",
+        ".listing-title",
         ".single-post-title",
         ".geodir-title",
         ".geodir_post_meta.geodir-field-post_title",
@@ -228,13 +243,38 @@ def _extract_business_title(soup: BeautifulSoup) -> str:
     return ""
 
 
-def _extract_title_from_html_title_tag(soup: BeautifulSoup) -> str:
+def _extract_og_title(soup: BeautifulSoup) -> str:
+    """
+    og:title is set by nearly every SEO plugin (Yoast, RankMath, AIOSEO)
+    independently of whichever theme markup renders the visible h1, so
+    it's a reliable fallback when the DOM selectors above miss a theme
+    that doesn't use the classes we know about.
+    """
+    og = soup.find("meta", property="og:title")
+    if og and og.get("content"):
+        return _clean(og["content"])
+    return ""
+
+
+def _extract_title_from_html_title_tag(soup: BeautifulSoup, site_name: str = "") -> str:
     """
     Last-resort fallback for the business name. The <title> tag on these
     listing-directory pages conventionally reads
-    "<Business Name> - <Site Name>" (or "| <Site Name>"); split on the
-    LAST such separator and keep everything before it, since the
-    business name is always the leading part in that convention.
+    "<Business Name> <separator> <Site Name>"; split on the LAST such
+    separator and keep everything before it, since the business name is
+    always the leading part in that convention.
+
+    The separator character class was expanded from just "-" and "|" to
+    also include the typographic en dash "–", em dash "—", and a bullet
+    "•" -- WordPress SEO plugins (Yoast/RankMath) commonly use one of
+    these instead of a plain hyphen, and the previous version silently
+    failed to split on those, returning the *whole* "Name – Site Name"
+    string (or nothing at all, if the whole-string fallback then failed
+    an emptiness check elsewhere) instead of just the business name.
+
+    If a site_name (e.g. from meta og:site_name) is supplied and it
+    appears verbatim in the title, it's stripped directly as a second,
+    independent safety net regardless of which separator was used.
     """
     title_tag = soup.find("title")
     if not title_tag:
@@ -242,7 +282,16 @@ def _extract_title_from_html_title_tag(soup: BeautifulSoup) -> str:
     text = _clean(title_tag.get_text())
     if not text:
         return ""
-    parts = re.split(r"\s+[-|]\s+(?!.*\s+[-|]\s+)", text)
+
+    if site_name:
+        text = re.sub(
+            r"\s*[-|–—•:]\s*" + re.escape(site_name) + r"\s*$",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        ).strip()
+
+    parts = re.split(r"\s+[-|–—•]\s+(?!.*\s+[-|–—•]\s+)", text)
     return _clean(parts[0]) if parts else text
 
 
@@ -258,11 +307,28 @@ def parse_bulkadspost(url: str, html: str) -> dict:
     soup = BeautifulSoup(html, "lxml")
     jsonld = _find_localbusiness_jsonld(soup) or {}
 
-    # ---- Name -------------------------------------------------------
+    # ---- Name -----------------------------------------------------------
+    # Layered fallback, each one independent of the others so a gap in
+    # any single source doesn't leave Name blank:
+    #   1. JSON-LD "name", then "legalName", then "alternateName" --
+    #      some GeoDirectory schema output only populates legalName for
+    #      LocalBusiness listings, not name.
+    #   2. DOM selectors scoped to the listing title (see
+    #      _extract_business_title docstring for what changed here).
+    #   3. og:title meta tag -- set independently by SEO plugins.
+    #   4. <title> tag, stripping the site name / separator.
+    site_name = ""
+    og_site_name = soup.find("meta", property="og:site_name")
+    if og_site_name and og_site_name.get("content"):
+        site_name = _clean(og_site_name["content"])
+
     name = (
         _clean(jsonld.get("name"))
+        or _clean(jsonld.get("legalName"))
+        or _clean(jsonld.get("alternateName"))
         or _extract_business_title(soup)
-        or _extract_title_from_html_title_tag(soup)
+        or _extract_og_title(soup)
+        or _extract_title_from_html_title_tag(soup, site_name=site_name)
     )
 
     # ---- Address ------------------------------------------------------
@@ -326,7 +392,7 @@ def parse_bulkadspost(url: str, html: str) -> dict:
     logo = _extract_logo(soup, jsonld)
 
     return {
-        "Name": name,
+        "Business Name": name,
         "Street": street,
         "City": city,
         "State": state,
@@ -371,7 +437,7 @@ def main():
         print(json.dumps(results, indent=2, ensure_ascii=False))
     else:
         for r in results:
-            print(f"\n=== {r.get('Name') or r.get('Source URL')} ===")
+            print(f"\n=== {r.get('Business Name') or r.get('Source URL')} ===")
             for field in FIELDS:
                 print(f"{field:15}: {r.get(field, '')}")
 
