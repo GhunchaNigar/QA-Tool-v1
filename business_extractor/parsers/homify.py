@@ -71,7 +71,7 @@ def _homify_local_business_ld(soup):
 
 
 def _homify_split_address(address):
-    """Return (street, city, state), detecting which of Homify's three
+    """Return (street, city, state), detecting which of Homify's
     observed address layouts this particular page uses (see module
     docstring) rather than assuming one unconditionally.
 
@@ -84,8 +84,8 @@ def _homify_split_address(address):
     Signal 2 (only checked once signal 1 has ruled out the first
     layout, and only when addressRegion is empty): on the
     "state-in-street" layout, streetAddress's final comma-separated
-    segment is a bare 2-letter state abbreviation. Real street
-    addresses essentially never end a comma segment with exactly a
+    segment is (or ends with) a bare 2-letter state abbreviation. Real
+    street addresses essentially never end a segment with exactly a
     state abbreviation, so this is safe to treat as a positive match.
     """
     locality = clean(address.get("addressLocality", ""))
@@ -131,21 +131,51 @@ def _homify_split_street_city(street_address):
 
 
 def _homify_strip_trailing_state_abbr(street_address):
-    """Return (street, state_abbr). If streetAddress's final
-    comma-separated segment is a recognized 2-letter USPS state
-    abbreviation (e.g. "1402 Park St, Ste G, CA"), split it out as the
-    state and return the remaining segments rejoined as the street.
+    """Return (street, state_abbr). Handles two sub-variants of
+    layout 3 ("state-in-street"):
+
+    3a) The final comma-separated segment IS a bare 2-letter USPS
+        state abbreviation (e.g. "1402 Park St, Ste G, CA") -- split
+        it out as its own segment.
+    3b) There's no comma before the abbreviation at all; it's simply
+        appended as the last whitespace token of the last segment
+        (e.g. "2244 Faraday Ave #206 CA") -- split it off that token
+        instead.
+
     Otherwise returns (cleaned street_address, "") unchanged.
 
     Only called once we've confirmed (via addressLocality NOT being a
     state name, and addressRegion being empty) that this page might be
-    layout 3 -- see module docstring. Requires at least 2 segments so
-    a bare "CA" with nothing else in streetAddress is left alone
-    rather than being emptied out entirely.
+    layout 3 -- see module docstring. Requires at least 2 "units" (two
+    comma segments for 3a, or two whitespace tokens in the last
+    segment for 3b) so a bare "CA" with nothing else in streetAddress
+    is left alone rather than being emptied out entirely.
+
+    Note: because 3b matches on a bare trailing whitespace token
+    rather than a comma-delimited one, it can in principle collide
+    with a genuine directional street suffix that happens to share
+    its letters with a state abbreviation (e.g. "...St NE", where NE
+    could be "Northeast" rather than Nebraska). This is treated as an
+    acceptable trade-off since such collisions are rare relative to
+    the layout-3 addresses this is meant to catch.
     """
     parts = [p.strip() for p in (street_address or "").split(",") if p.strip()]
-    if len(parts) >= 2 and parts[-1].upper() in US_STATE_ABBREVIATIONS:
-        return ", ".join(parts[:-1]), parts[-1].upper()
+    if not parts:
+        return clean(street_address), ""
+
+    last = parts[-1]
+    if len(parts) >= 2 and last.upper() in US_STATE_ABBREVIATIONS:
+        # 3a: abbreviation is its own comma segment.
+        return ", ".join(parts[:-1]), last.upper()
+
+    tokens = last.split()
+    if len(tokens) >= 2 and tokens[-1].upper() in US_STATE_ABBREVIATIONS:
+        # 3b: abbreviation is glued onto the end of the last segment
+        # with a space instead of a comma.
+        remaining_last = " ".join(tokens[:-1])
+        new_parts = parts[:-1] + ([remaining_last] if remaining_last else [])
+        return ", ".join(new_parts), tokens[-1].upper()
+
     return clean(street_address), ""
 
 
