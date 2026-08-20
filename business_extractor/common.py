@@ -1,14 +1,3 @@
-"""
-Shared imports, constants, and helper functions used across every
-site parser in business_extractor.parsers.
-
-This module used to be the top of the monolithic extractor.py.
-Every parser file does `from ..common import *` to get all of this
-(regular expressions/BeautifulSoup imports, clean(), empty_business(),
-the bot-wall/cloudflare detectors, the fetchers, and the
-fields_config-driven filter_business_fields()).
-"""
-
 __all__ = [
     'json',
     're',
@@ -155,7 +144,13 @@ def _split_listings_gbd_address(address):
         city = parts[-2]
         state_zip = parts[-1]
     elif len(parts) == 2:
-        city = parts[0]
+        # parts[0] is often "<street> <city>" glued together with no
+        # comma between them (e.g. "2244 Faraday Ave #206 Carlsbad"),
+        # rather than being purely a city with no street. Reuse the
+        # same trailing-city splitter _split_blinx_address relies on
+        # for this shape, instead of dumping the whole run into City
+        # and leaving Street blank.
+        street, city = _split_trailing_city(parts[0])
         state_zip = parts[1]
     elif len(parts) == 1:
         state_zip = parts[0]
