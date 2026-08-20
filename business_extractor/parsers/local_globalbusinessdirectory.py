@@ -79,8 +79,8 @@ def split_address(full_address: str):
 
     addr = clean(full_address)
 
-    # Pattern: "<street>, <state?> <city>, <ST> <ZIP>" — the common
-    # "<everything>, <City>, <ST> <ZIP[-XXXX]>" shape.
+    # Pattern: "<street>, <city>, <ST> <ZIP>" — the "<everything>, <City>,
+    # <ST> <ZIP[-XXXX]>" shape, with a comma separating street and city.
     m = re.search(
         r"^(?P<street>.*?),\s*(?P<city>[A-Za-z .'\-]+?),\s*"
         r"(?P<state>[A-Za-z]{2})\s+(?P<zip>\d{5}(?:-\d{4})?)\s*$",
@@ -139,7 +139,19 @@ def extract_social_links(soup):
     return sorted(links)
 
 
-def parse_localglobalbusinessdirectory(html: str, source_url: str = None) -> dict:
+def parse_localglobalbusinessdirectory(url, html):
+    # NOTE: argument order is (url, html) -- matching the calling
+    # convention used by every parse_<site>(url, html) function in this
+    # codebase. This previously declared its signature as
+    # (html, source_url=None), i.e. swapped -- the same bug found in the
+    # cities.* and usa.* sibling parsers. Since the harness calls every
+    # site parser positionally as parse_<site>(url, html), that swap
+    # meant `html` was silently bound to the page URL string and
+    # `source_url` to the real HTML. BeautifulSoup(html, "lxml") then
+    # parsed a bare URL as if it were markup -- which has no tags at
+    # all -- so soup came back essentially empty and every field ended
+    # up blank, with no exception raised anywhere.
+    source_url = url
     soup = BeautifulSoup(html, "lxml")
     ld = extract_json_ld(soup) or {}
 
@@ -185,7 +197,13 @@ def parse_localglobalbusinessdirectory(html: str, source_url: str = None) -> dic
     social_links = extract_social_links(soup)
 
     return {
-        "Name": name,
+        # NOTE: key must be "Business Name", not "Name" -- every other
+        # site parser in this codebase (see empty_business() in
+        # common.py) returns the business name under "Business Name".
+        # A mismatched key here means the harness's downstream
+        # merge/normalization step silently drops this field even once
+        # the argument-order bug above is fixed.
+        "Business Name": name,
         "Owner Name": owner_name,
         "Street": street,
         "City": city,
@@ -206,7 +224,10 @@ def scrape(source: str) -> dict:
     """Convenience wrapper: fetch (URL or local path) + parse in one call."""
     html = fetch_html(source)
     source_url = source if source.startswith("http") else None
-    return parse_listing(html, source_url=source_url)
+    # Fixed: was calling the undefined name `parse_listing(...)`; the
+    # function actually defined in this module is
+    # `parse_localglobalbusinessdirectory`, called (url, html).
+    return parse_localglobalbusinessdirectory(source_url, html)
 
 
 def main(argv):
@@ -217,7 +238,10 @@ def main(argv):
     results = []
     for source in argv[1:]:
         html = fetch_html(source)
-        record = parse_listing(html, source_url=source if source.startswith("http") else None)
+        source_url = source if source.startswith("http") else None
+        # Fixed: same undefined-function-name bug as scrape() above,
+        # plus corrected argument order to (url, html).
+        record = parse_localglobalbusinessdirectory(source_url, html)
         results.append(record)
 
     print(json.dumps(results, indent=2, ensure_ascii=False))
