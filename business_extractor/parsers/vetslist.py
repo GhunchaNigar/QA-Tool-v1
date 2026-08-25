@@ -5,6 +5,54 @@ Site parser: vetslist.com
 from ..common import *  # noqa: F401,F403 -- see business_extractor/common.py
 
 
+def _strip_leaked_address(text, business):
+    """Some listings glue the street address and the country into a single
+    text node with no <br/> or tag boundary for BeautifulSoup to split on
+    -- the whole thing is one literal string in the source HTML (e.g.
+    "1883 N Silverspring Dr, Appleton, WI 54913 United States of
+    America"). If the zip code we already parsed for this business shows
+    up inside the candidate country text, assume the address leaked in
+    and keep only whatever comes after the LAST occurrence of the zip
+    code, stripping any leftover punctuation/whitespace.
+    """
+    zipcode = business.get("Zipcode")
+    if is_meaningful(zipcode) and zipcode in text:
+        text = text.rsplit(zipcode, 1)[-1]
+    return clean(text.strip(" ,-"))
+
+
+def _country_from_line(header_line, business):
+    """Extract a country string from a "<category><br/><country>" style
+    header line -- or from a "Get Directions" style line where the
+    address and country are glued together with no separator at all.
+    Returns "" if nothing usable is found.
+    """
+    # Preferred path: a real <br/> splits the line into distinct pieces.
+    # get_text(separator="\n") is robust to the country being a bare text
+    # node OR wrapped in its own tag after the <br/>.
+    if header_line.find("br"):
+        lines = [clean(t) for t in header_line.get_text(separator="\n").split("\n")]
+        lines = [t for t in lines if is_meaningful(t)]
+        if len(lines) >= 2:
+            candidate = _strip_leaked_address(lines[-1], business)
+            if is_meaningful(candidate):
+                return candidate
+
+    # Fallback: no <br/> (or the <br/>-based split didn't isolate
+    # anything usable) -- the address and country may be one literal
+    # text node glued together by a plain space in the source HTML.
+    # Anchor on the zip code we already parsed to pull the country back
+    # out; if there's no zip code to anchor on, or the zip code isn't in
+    # this line at all, there's nothing safe to extract here.
+    full_text = clean(header_line.get_text(separator=" "))
+    zipcode = business.get("Zipcode")
+    if is_meaningful(zipcode) and zipcode in full_text:
+        candidate = _strip_leaked_address(full_text, business)
+        if is_meaningful(candidate):
+            return candidate
+
+    return ""
+
 
 def parse_vetslist(url, html):
 
@@ -108,6 +156,7 @@ def parse_vetslist(url, html):
         br = addr_li.find("br")
         if br and br.next_sibling:
             country_text = clean(str(br.next_sibling))
+            country_text = _strip_leaked_address(country_text, business)
             if is_meaningful(country_text):
                 business["Country"] = country_text
 
@@ -124,48 +173,32 @@ def parse_vetslist(url, html):
     # Only used as a fallback so it never overrides a country already found
     # in the address block itself.
     #
-    # CAUTION: "line-height-xl" is not unique to that header line -- the
+    # CAUTION #1: "line-height-xl" is not unique to that header line -- the
     # sidebar "Get Directions" widget also stamps it on its own address
     # paragraph, e.g. (Valley Exteriors):
     #   <p class="btn-sm bg-secondary text-center nomargin line-height-xl
     #             bold no-radius-bottom">
     #       <i class="fa fa-map-marker fa-fw text-danger"></i>
-    #       1883 N Silverspring Dr, Appleton, WI 54913
+    #       1883 N Silverspring Dr, Appleton, WI 54913 United States of America
     #   </p>
-    # That paragraph has no <br/> and no country in it. Grabbing it via
-    # select_one() (which just returns the first DOM match) silently kills
-    # the fallback -- header_br ends up None and Country is left blank even
-    # though the real "<category><br/>country" line exists on the page.
-    # Scan every "p.line-height-xl" candidate instead of trusting the
-    # first one, explicitly skip the map sidebar widget, and read the
-    # country via get_text() (split on lines) rather than a bare
-    # next_sibling lookup, since the text after the <br/> isn't always a
-    # plain NavigableString -- it can be wrapped in its own tag.
+    # On some listings that widget DOES carry the country appended after
+    # the address -- but on the SAME line, with no <br/> or tag boundary
+    # separating them (it's one literal text node in the source HTML), so
+    # line-splitting alone can't isolate the country from the address.
+    #
+    # CAUTION #2: because of that, naive get_text() splitting either grabs
+    # nothing (no <br/> to split on) or grabs the whole glued string
+    # ("1883 N Silverspring Dr, Appleton, WI 54913 United States of
+    # America") as a single "country". Since we've already parsed this
+    # business's zip code by this point, use it as an anchor: whatever
+    # text follows the zip code -- whether split by a <br/>, a tag
+    # boundary, or nothing at all -- is the real country.
     if not is_meaningful(business["Country"]):
         for header_line in soup.select("p.line-height-xl"):
-            # Skip the "Get Directions" sidebar widget's address line --
-            # never a category/country header, and matching it here was
-            # exactly what silently emptied Country on Shape 3 listings.
-            if header_line.find_parent(class_="post_location_map"):
-                continue
-
-            header_br = header_line.find("br")
-            if not header_br:
-                # No <br/> means this isn't the "<category><br/>country"
-                # pattern we're looking for -- try the next candidate
-                # instead of giving up entirely.
-                continue
-
-            # get_text(separator="\n") is robust to the country being a bare
-            # text node OR wrapped in its own tag after the <br/>.
-            lines = [clean(t) for t in header_line.get_text(separator="\n").split("\n")]
-            lines = [t for t in lines if is_meaningful(t)]
-
-            if len(lines) >= 2:
-                country_text = lines[-1]
-                if is_meaningful(country_text):
-                    business["Country"] = country_text
-                    break
+            country_text = _country_from_line(header_line, business)
+            if is_meaningful(country_text):
+                business["Country"] = country_text
+                break
 
     # ---- Category (breadcrumb crumb right before the current-page
     # business name; "Home"/root crumbs are excluded) ----
