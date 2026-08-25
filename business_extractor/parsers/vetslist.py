@@ -123,14 +123,49 @@ def parse_vetslist(url, html):
     #   </p>
     # Only used as a fallback so it never overrides a country already found
     # in the address block itself.
+    #
+    # CAUTION: "line-height-xl" is not unique to that header line -- the
+    # sidebar "Get Directions" widget also stamps it on its own address
+    # paragraph, e.g. (Valley Exteriors):
+    #   <p class="btn-sm bg-secondary text-center nomargin line-height-xl
+    #             bold no-radius-bottom">
+    #       <i class="fa fa-map-marker fa-fw text-danger"></i>
+    #       1883 N Silverspring Dr, Appleton, WI 54913
+    #   </p>
+    # That paragraph has no <br/> and no country in it. Grabbing it via
+    # select_one() (which just returns the first DOM match) silently kills
+    # the fallback -- header_br ends up None and Country is left blank even
+    # though the real "<category><br/>country" line exists on the page.
+    # Scan every "p.line-height-xl" candidate instead of trusting the
+    # first one, explicitly skip the map sidebar widget, and read the
+    # country via get_text() (split on lines) rather than a bare
+    # next_sibling lookup, since the text after the <br/> isn't always a
+    # plain NavigableString -- it can be wrapped in its own tag.
     if not is_meaningful(business["Country"]):
-        header_line = soup.select_one("p.line-height-xl")
-        if header_line:
+        for header_line in soup.select("p.line-height-xl"):
+            # Skip the "Get Directions" sidebar widget's address line --
+            # never a category/country header, and matching it here was
+            # exactly what silently emptied Country on Shape 3 listings.
+            if header_line.find_parent(class_="post_location_map"):
+                continue
+
             header_br = header_line.find("br")
-            if header_br and header_br.next_sibling:
-                country_text = clean(str(header_br.next_sibling))
+            if not header_br:
+                # No <br/> means this isn't the "<category><br/>country"
+                # pattern we're looking for -- try the next candidate
+                # instead of giving up entirely.
+                continue
+
+            # get_text(separator="\n") is robust to the country being a bare
+            # text node OR wrapped in its own tag after the <br/>.
+            lines = [clean(t) for t in header_line.get_text(separator="\n").split("\n")]
+            lines = [t for t in lines if is_meaningful(t)]
+
+            if len(lines) >= 2:
+                country_text = lines[-1]
                 if is_meaningful(country_text):
                     business["Country"] = country_text
+                    break
 
     # ---- Category (breadcrumb crumb right before the current-page
     # business name; "Home"/root crumbs are excluded) ----
