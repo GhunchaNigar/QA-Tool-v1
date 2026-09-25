@@ -2,7 +2,7 @@
 excel_writer.py
 Generates a 3-sheet colored Excel report:
   1. "Business Info"   — the data the user typed into the form
-  2. "Comparison"       — CORRECT / INCORRECT (+ extracted value) / MISSING / N/A per field
+  2. "Comparison"       — CORRECT / INCORRECT / MISSING / N/A per field (existing behaviour)
   3. "Extracted Data"   — the raw value extracted from each live page per field
 
 Supports mixed-source reports — all ALL_FIELDS as columns,
@@ -14,7 +14,7 @@ import re
 import openpyxl
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
-from fields_config import ALL_FIELDS, SOURCE_FIELDS, VISUAL_FIELDS
+from fields_config import ALL_FIELDS, SOURCE_FIELDS
 
 # ── Color fills ───────────────────────────────────────────────────────────────
 FILL_RED           = PatternFill("solid", fgColor="FF0000")
@@ -51,19 +51,8 @@ BORDER_STATUS_HEADER = Border(
     top=THICK_PURPLE,  bottom=THICK_PURPLE,
 )
 
-# Exact-match values that should always render as a red "attention" cell.
-# NOTE: "INCORRECT" is also matched as a *prefix* (see _is_red_value) since
-# the Comparison sheet now appends the extracted value, e.g.
-# "INCORRECT /roofing contractor, Siding Contractor".
+# Values that should always render as a red "attention" cell, across sheets.
 _RED_VALUES = {"INCORRECT", "MISSING", "SCRAPE ERROR"}
-
-
-def _is_red_value(value) -> bool:
-    if not isinstance(value, str):
-        return False
-    if value in _RED_VALUES:
-        return True
-    return value.startswith("INCORRECT")
 
 
 def make_filename(business_name: str) -> str:
@@ -98,7 +87,7 @@ def _style_value_cell(cell, value, nowrap=False):
     align_center = ALIGN_CENTER_NOWRAP if nowrap else ALIGN_CENTER
     align_left   = ALIGN_LEFT_NOWRAP if nowrap else ALIGN_LEFT
 
-    if _is_red_value(value):
+    if value in _RED_VALUES:
         _style_cell(cell, fill=FILL_RED, font=FONT_RED,
                     alignment=align_center, border=BORDER_THIN)
     elif value == "N/A":
@@ -152,20 +141,12 @@ def _write_business_info_sheet(ws, user_data: dict):
         # (see app.py) rather than free text — show something readable.
         if field in ("Logo", "Photos"):
             value = "Should be present" if value else "Not required"
-        # Any field left blank on the form -> show "N/A" instead of an
-        # empty cell, so it reads as "not provided" rather than "missing".
-        if isinstance(value, str) and not value.strip():
-            value = "N/A"
         ws.append([field, value])
         row_idx = ws.max_row
         _style_cell(ws.cell(row_idx, 1),
             font=Font(bold=True, size=10), alignment=ALIGN_LEFT, border=BORDER_THIN)
-        if value == "N/A":
-            _style_cell(ws.cell(row_idx, 2),
-                fill=FILL_GRAY, font=FONT_GRAY, alignment=ALIGN_LEFT, border=BORDER_THIN)
-        else:
-            _style_cell(ws.cell(row_idx, 2),
-                font=FONT_NORMAL, alignment=ALIGN_LEFT, border=BORDER_THIN)
+        _style_cell(ws.cell(row_idx, 2),
+            font=FONT_NORMAL, alignment=ALIGN_LEFT, border=BORDER_THIN)
 
     ws.column_dimensions["A"].width = 22
     ws.column_dimensions["B"].width = 60
@@ -174,43 +155,18 @@ def _write_business_info_sheet(ws, user_data: dict):
 
 # ── Sheet 2: Comparison (CORRECT/INCORRECT/MISSING/N/A) ───────────────────────
 
-def _extracted_value_for(field: str, extracted_row: dict):
-    """Pull the raw extracted value for `field` out of an Extracted Data
-    row dict, returning None if there's nothing usable to show."""
-    if not extracted_row:
-        return None
-    raw = extracted_row.get(field)
-    if raw in (None, ""):
-        return None
-    return str(raw)
-
-
-def _write_comparison_sheet(ws, results: list, extracted_by_url: dict = None):
-    """
-    extracted_by_url: {live_link: extracted_row_dict} — used so that any
-    field marked INCORRECT can show what was actually scraped, e.g.
-    "INCORRECT /roofing contractor, Siding Contractor" instead of a bare
-    "INCORRECT".
-    """
-    extracted_by_url = extracted_by_url or {}
+def _write_comparison_sheet(ws, results: list):
     headers = ["Source", "Live Link", "Status"] + ALL_FIELDS
     _write_header_row(ws, headers, status_col_header="Status")
 
     for result in results or []:
-        live_link = result.get("Live Link", "")
-        extracted_row = extracted_by_url.get(live_link, {})
-
         row_values = [
             result.get("Source", ""),
-            live_link,
+            result.get("Live Link", ""),
             result.get("Status", ""),
         ]
         for field in ALL_FIELDS:
-            status = result.get(field, "N/A")
-            if status == "INCORRECT":
-                extracted_val = _extracted_value_for(field, extracted_row)
-                status = f"INCORRECT /{extracted_val}" if extracted_val else "INCORRECT"
-            row_values.append(status)
+            row_values.append(result.get(field, "N/A"))
 
         ws.append(row_values)
         row_idx = ws.max_row
@@ -232,16 +188,7 @@ def _fields_allowed_for_source(source: str):
     return None  # None = no restriction, every field allowed
 
 
-def _write_extracted_sheet(ws, extracted_list: list, url_to_source: dict, user_data: dict = None):
-    """
-    user_data : the dict of values the user typed into the form. When a
-    field was left blank on the form, that field is shown as "N/A" on
-    this sheet too — mirroring the same "blank input -> N/A" rule the
-    Comparison sheet already applies (see comparator.compare_row).
-    Visual fields (Logo/Photos) are exempt, since they're graded on
-    presence alone and have no user-typed value to be "blank".
-    """
-    user_data = user_data or {}
+def _write_extracted_sheet(ws, extracted_list: list, url_to_source: dict):
     headers = ["Source", "Live Link", "Status"] + ALL_FIELDS
     _write_header_row(ws, headers, status_col_header="Status")
 
@@ -257,16 +204,10 @@ def _write_extracted_sheet(ws, extracted_list: list, url_to_source: dict, user_d
             "SCRAPE ERROR" if scrape_error else "OK",
         ]
         for field in ALL_FIELDS:
-            user_val = str(user_data.get(field, "")).strip()
-
             if allowed is not None and field not in allowed:
                 value = "N/A"
             elif scrape_error:
                 value = "SCRAPE ERROR"
-            elif field not in VISUAL_FIELDS and not user_val:
-                # User left this field blank on the form -> N/A, regardless
-                # of whether the page happened to have a value.
-                value = "N/A"
             else:
                 raw = row.get(field, "")
                 value = raw if raw not in (None, "") else "MISSING"
@@ -301,14 +242,12 @@ def write_excel(results: list, extracted_list: list = None, user_data: dict = No
     ws_business.title = "Business Info"
     _write_business_info_sheet(ws_business, user_data or {})
 
-    extracted_by_url = {r.get("_url", ""): r for r in (extracted_list or [])}
-
     ws_comparison = wb.create_sheet("Comparison")
-    _write_comparison_sheet(ws_comparison, results, extracted_by_url)
+    _write_comparison_sheet(ws_comparison, results)
 
     ws_extracted = wb.create_sheet("Extracted Data")
     url_to_source = {r.get("Live Link", ""): r.get("Source", "unknown") for r in (results or [])}
-    _write_extracted_sheet(ws_extracted, extracted_list or [], url_to_source, user_data)
+    _write_extracted_sheet(ws_extracted, extracted_list or [], url_to_source)
 
     buf = io.BytesIO()
     wb.save(buf)

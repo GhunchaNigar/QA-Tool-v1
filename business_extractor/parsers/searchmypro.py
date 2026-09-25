@@ -11,27 +11,6 @@ _SEARCHMYPRO_ADDRESS_RE = re.compile(
     r"(?P<state>[A-Za-z][A-Za-z .]*?)\s+(?P<zip>\d{5}(?:-\d{4})?)$"
 )
 
-# Strips a trailing ", <Full State Name>" segment some listings append after
-# the "State Zip" pair (e.g. "..., WI 54913, Wisconsin"), so the address
-# regex -- which expects the string to end in a zip code -- can still match
-# once that duplicate is removed.
-_TRAILING_STATE_NAME_RE = re.compile(r",\s*[A-Za-z][A-Za-z .]*$")
-
-# Fallback for listings where the source markup drops the comma between the
-# street and city (e.g. "2244 Faraday Ave #206 Carlsbad, CA 92008" instead
-# of the expected "2244 Faraday Ave #206, Carlsbad, CA 92008"). Only fires
-# when a suite/unit designator sits directly before the city, since that's
-# a reliable boundary to split on -- this avoids misparsing ordinary
-# multi-word street names that happen to lack a comma for some other
-# reason. Without this fallback, _SEARCHMYPRO_ADDRESS_RE never matches
-# (it requires two commas), and the caller falls back to dumping the
-# entire raw string into Street with City/State/Zipcode left empty.
-_SEARCHMYPRO_ADDRESS_NO_COMMA_RE = re.compile(
-    r"^(?P<street>.+?(?:#\S+|\bSuite\s+\S+|\bSte\.?\s+\S+|\bUnit\s+\S+|\bApt\.?\s+\S+))\s+"
-    r"(?P<city>[A-Za-z][A-Za-z .'\-]*?),\s*"
-    r"(?P<state>[A-Za-z][A-Za-z .]*?)\s+(?P<zip>\d{5}(?:-\d{4})?)$"
-)
-
 
 def _searchmypro_jsonld_local_business(soup):
     """Return the LocalBusiness object from the page's JSON-LD (handles
@@ -54,26 +33,6 @@ def _searchmypro_jsonld_local_business(soup):
                 return obj
 
     return None
-
-
-def _match_searchmypro_address(addr_text):
-    """Match addr_text against _SEARCHMYPRO_ADDRESS_RE, retrying once with
-    a trailing duplicated full-state-name segment stripped (see
-    _TRAILING_STATE_NAME_RE) if the first pass doesn't match, and finally
-    falling back to _SEARCHMYPRO_ADDRESS_NO_COMMA_RE for listings whose
-    markup omits the comma between the street and city (see that regex's
-    docstring)."""
-    match = _SEARCHMYPRO_ADDRESS_RE.match(addr_text)
-    if match:
-        return match
-
-    stripped = _TRAILING_STATE_NAME_RE.sub("", addr_text)
-    if stripped != addr_text:
-        match = _SEARCHMYPRO_ADDRESS_RE.match(stripped)
-        if match:
-            return match
-
-    return _SEARCHMYPRO_ADDRESS_NO_COMMA_RE.match(addr_text)
 
 
 def parse_searchmypro(url, html):
@@ -126,44 +85,12 @@ def parse_searchmypro(url, html):
             business["Description"] = desc_text
 
     # ---- Address ----
-    # Markup shapes seen on this template:
+    # Two markup shapes seen on this template:
     #  (a) one <span> holding the full "Street, City, State Zip" string
     #      (e.g. the Focal listing)
     #  (b) four separate <span> elements -- street, city, state, zip --
     #      with a trailing plain-text country after the final <br>
     #      (e.g. the WrightWay Emergency Services listing)
-    #  (c) one <span> holding "Street, City, State Zip[, Full State Name]"
-    #      followed by a <br> and then the country as a second line inside
-    #      the SAME span (e.g. some listings). Using span.get_text() here
-    #      would glue the state name and country together with no
-    #      separator at all ("WisconsinUnited States"), since get_text()
-    #      inserts nothing across a <br>. Split on <br> first instead, so
-    #      the address line and the country line stay separate.
-    #  (d) two direct <span> children -- the first holding the full
-    #      "Street, City, State Zip" string, the second holding a
-    #      redundant full state name (e.g. "Wisconsin") -- followed by a
-    #      <br> and then the country as a plain-text sibling node (not
-    #      inside either span). Example markup:
-    #        <span>1883 N Silverspring Dr, Appleton, WI 54913</span>,
-    #        <span>Wisconsin</span><br>United States
-    #      This previously fell through to the "unexpected span count"
-    #      else-branch, which called addr_container.get_text() and glued
-    #      the state name and country together the same way shape (c)'s
-    #      naive text-join would, producing something like
-    #      "...54913, WisconsinUnited States" with nothing split out into
-    #      Street/City/State/Zip. Parse span 1 directly instead, and
-    #      ignore span 2 (it's a duplicate of the state already captured
-    #      from span 1). The country is picked up separately by the
-    #      trailing-text-node fallback further below.
-    #  (e) one <span> holding "Street City, State Zip" where the source
-    #      markup omits the comma that should separate the street from
-    #      the city, immediately after a suite/unit designator (e.g.
-    #      "2244 Faraday Ave #206 Carlsbad, CA 92008"). The primary
-    #      "Street, City, State Zip" regex requires two commas and never
-    #      matches this shape; _match_searchmypro_address falls back to
-    #      _SEARCHMYPRO_ADDRESS_NO_COMMA_RE to split it correctly instead
-    #      of dumping the whole string into Street (see that regex's
-    #      docstring).
     addr_container = soup.select_one(".overview-tab-the-member-address .col-sm-8")
     if addr_container:
         addr_spans = addr_container.find_all("span", recursive=False)
@@ -173,30 +100,9 @@ def parse_searchmypro(url, html):
             business["City"] = clean(addr_spans[1].get_text())
             business["State"] = clean(addr_spans[2].get_text())
             business["Zipcode"] = clean(addr_spans[3].get_text())
-        elif len(addr_spans) == 2:
-            # Shape (d): span 1 = "Street, City, State Zip", span 2 =
-            # redundant full state name -- ignore it.
-            addr_text = clean(addr_spans[0].get_text())
-            match = _match_searchmypro_address(addr_text) if addr_text else None
-            if match:
-                business["Street"] = clean(match.group("street"))
-                business["City"] = clean(match.group("city"))
-                business["State"] = clean(match.group("state"))
-                business["Zipcode"] = match.group("zip")
-            elif addr_text:
-                # Fall back to storing the raw string as Street rather than
-                # dropping the address entirely if it doesn't match the
-                # expected "Street, City, State Zip" shape.
-                business["Street"] = addr_text
         elif len(addr_spans) == 1:
-            span = addr_spans[0]
-            span_lines = clean_multiline(span.decode_contents()).split("\n")
-            addr_text = clean(span_lines[0]) if span_lines else ""
-            # A second line inside the same span (after a <br>) is the
-            # country for shape (c) -- stash it for the Country block below.
-            span_country_line = clean(span_lines[-1]) if len(span_lines) > 1 else ""
-
-            match = _match_searchmypro_address(addr_text) if addr_text else None
+            addr_text = clean(addr_spans[0].get_text())
+            match = _SEARCHMYPRO_ADDRESS_RE.match(addr_text) if addr_text else None
             if match:
                 business["Street"] = clean(match.group("street"))
                 business["City"] = clean(match.group("city"))
@@ -207,9 +113,6 @@ def parse_searchmypro(url, html):
                 # dropping the address entirely if it doesn't match the
                 # expected "Street, City, State Zip" shape.
                 business["Street"] = addr_text
-
-            if span_country_line and is_meaningful(span_country_line):
-                business["Country"] = span_country_line
         else:
             # Unexpected span count -- fall back to the raw container text
             # rather than dropping the address entirely.
@@ -219,17 +122,14 @@ def parse_searchmypro(url, html):
 
         # Country: trailing plain-text node directly under the container
         # (after the final <br>), not inside any of the address spans.
-        # Only used when the address didn't already come from the
-        # single-span shape (c) above, which sets Country itself.
-        if not business["Country"]:
-            trailing_text_nodes = [
-                clean(node) for node in addr_container.contents
-                if isinstance(node, NavigableString) and clean(node) and clean(node) != ","
-            ]
-            if trailing_text_nodes:
-                country_text = trailing_text_nodes[-1]
-                if country_text:
-                    business["Country"] = country_text
+        trailing_text_nodes = [
+            clean(node) for node in addr_container.contents
+            if isinstance(node, NavigableString) and clean(node) and clean(node) != ","
+        ]
+        if trailing_text_nodes:
+            country_text = trailing_text_nodes[-1]
+            if country_text:
+                business["Country"] = country_text
 
     # ---- Country fallback (JSON-LD) ----
     if not business["Country"]:
@@ -294,3 +194,5 @@ def parse_searchmypro(url, html):
             business["Logo"] = urljoin(url, image_url)
 
     return business
+
+

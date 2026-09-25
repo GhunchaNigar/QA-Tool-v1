@@ -11,7 +11,6 @@ import sys
 import json
 import asyncio
 import re
-import time
 from urllib.parse import urlparse
 
 def set_windows_event_loop():
@@ -33,17 +32,6 @@ BLOCK_SIGNALS = [
     "ddos-guard", "checking your browser", "verify you are human",
     "enable cookies to continue", "please enable cookies",
     "security check", "access to this page has been denied",
-    # Cloudflare's actual JS-challenge interstitial title/body text.
-    # Confirmed on bizmaker.org: the page title is literally
-    # "Just a moment..." and none of the phrases above matched it, so
-    # this 28KB challenge shell (Turnstile widget script, no real
-    # listing content) was sailing through _is_blocked() as "not
-    # blocked" and getting handed straight to the site parser, which
-    # correctly found nothing (0/18 fields) because there was nothing
-    # real there to find.
-    "just a moment",
-    "checking if the site connection is secure",
-    "review the security of your connection",
 ]
 
 # ── Rate-limit signals ───────────────────────────────────────────────
@@ -198,14 +186,6 @@ _CHROME_DOMAINS = (
     r"|linkedin\.com|youtube\.com|tiktok\.com|pinterest\.com"
     r"|google\.com|googletagmanager\.com|googleapis\.com|gstatic\.com"
     r"|doubleclick\.net|wa\.me|whatsapp\.com"
-    # cloudflare.com: Cloudflare's own "Just a moment..." challenge
-    # page footer links to cloudflare.com ("Performance & security by
-    # Cloudflare"). That single boilerplate link was enough to satisfy
-    # _has_real_data() below and mark a completely empty challenge
-    # page as "not thin" -- letting it through as a successful scrape
-    # with zero real content. Same class of bug as the manta.com case
-    # documented above, just a different chrome domain.
-    r"|cloudflare\.com|cloudflareinsights\.com|challenges\.cloudflare\.com"
 )
 
 _DATA_PRESENT_RE = re.compile(
@@ -238,54 +218,13 @@ def _is_thin(text, html="", min_chars=200, own_domain=None):
     return len(text.strip()) < min_chars
 
 
-# ── Internal deadline budgeting ──────────────────────────────────────
-# common.py's fetch_via_playwright() runs this whole script under a
-# hard subprocess.run(timeout=(timeout_ms/1000)+30) kill. Before this,
-# every stage below (fast networkidle goto, its domcontentloaded
-# fallback, _wait_for_data, and the fixed sleeps in
-# _extract_and_expand) claimed its own full timeout independently. On
-# a slow/rate-limited connection those add up: a failed 12s networkidle
-# wait, followed by a full 45s domcontentloaded fallback, followed by
-# an 8s data-wait, followed by ~10s of fixed extraction sleeps, comes
-# to ~75s for attempt 1 ALONE -- before attempt 2, rate-limit backoff,
-# or any of the debug-note logic below ever runs. That's exactly what
-# produced the bare "Command [...] timed out after 75.0 seconds"
-# failures on closelocation.com: subprocess.run() killed the process
-# before it could print any JSON at all, discarding every diagnostic
-# note this script builds up.
-#
-# The fix: give scrape() a single deadline (wall-clock, set once at
-# the very start, before the browser even launches) and have every
-# wait below shrink to whatever time is actually left before it,
-# instead of each stage claiming its own fixed budget. 20s (rather
-# than the full 30s of external slack) is used here deliberately, to
-# leave a ~10s cushion for browser launch, context/page setup, final
-# JSON serialization, and process teardown -- none of which are
-# covered by the per-attempt timeouts below, but which still eat into
-# the external 75s-style kill window.
-_DEADLINE_SAFETY_MARGIN_S = 20
-
-
-def _remaining_ms(deadline):
-    """Milliseconds left before `deadline` (a time.monotonic() value),
-    floored at 0. Never negative, so callers can pass this straight
-    into a Playwright `timeout=` without checking first."""
-    return max(0, (deadline - time.monotonic()) * 1000)
-
-
 async def _wait_for_data(page, timeout_ms):
     """Waits for a selector that signals real business data has
     rendered (see _DATA_READY_SELECTOR above), rather than a blind
     sleep. Never raises -- a timeout here just means the page may
-    genuinely have no phone/email/website at all, or is taking longer
+    genuinely have no phone/email/external link, or is taking longer
     than expected; either way extraction proceeds with whatever's
-    there, same as before this was added.
-
-    timeout_ms is expected to already be budget-bounded by the caller
-    (see _attempt below) -- a value of 0 means the deadline is already
-    gone, so this returns False immediately without waiting."""
-    if timeout_ms <= 0:
-        return False
+    there, same as before this was added."""
     try:
         await page.wait_for_selector(_DATA_READY_SELECTOR, timeout=timeout_ms)
         return True
@@ -293,73 +232,61 @@ async def _wait_for_data(page, timeout_ms):
         return False
 
 
-async def _extract_and_expand(page, deadline):
+async def _extract_and_expand(page):
     """Scrolls the page, force-expands hidden/collapsed content, clicks
     any 'See More'-style buttons, then returns (html, text, title).
     Split out from scrape() so it can be reused across retry attempts
-    without duplicating this logic.
-
-    Every fixed sleep here is capped by whatever's left before
-    `deadline` (see _DEADLINE_SAFETY_MARGIN_S above) -- on a page
-    that's already eaten most of its budget just navigating, this lets
-    extraction grab whatever's on the page right now instead of still
-    spending its full ~10s of fixed waits and blowing the external
-    subprocess kill-timeout with nothing to show for it."""
-
-    def _budget(default_ms):
-        return int(min(default_ms, _remaining_ms(deadline)))
+    without duplicating this logic."""
 
     # ── Scroll entire page to trigger lazy-loaded images and content ──
-    await page.wait_for_timeout(_budget(2000))
-    if _remaining_ms(deadline) > 500:
-        await page.evaluate("""async () => {
-            await new Promise(resolve => {
-                let total = document.body.scrollHeight;
-                let current = 0;
-                let step = 400;
-                const timer = setInterval(() => {
-                    window.scrollBy(0, step);
-                    current += step;
-                    if (current >= total) {
-                        clearInterval(timer);
-                        window.scrollTo(0, 0);
-                        resolve();
-                    }
-                }, 120);
-            });
-        }""")
-    await page.wait_for_timeout(_budget(2000))
+    await page.wait_for_timeout(2000)
+    await page.evaluate("""async () => {
+        await new Promise(resolve => {
+            let total = document.body.scrollHeight;
+            let current = 0;
+            let step = 400;
+            const timer = setInterval(() => {
+                window.scrollBy(0, step);
+                current += step;
+                if (current >= total) {
+                    clearInterval(timer);
+                    window.scrollTo(0, 0);
+                    resolve();
+                }
+            }, 120);
+        });
+    }""")
+    await page.wait_for_timeout(2000)
 
     # ── Expand all collapsed/hidden text sections ──────────────────
     # This handles "See More", "Show more", max-height collapsing, etc.
-    if _remaining_ms(deadline) > 500:
-        await page.evaluate("""() => {
-            // Force-show all hidden elements that contain text
-            document.querySelectorAll('*').forEach(el => {
-                const style = window.getComputedStyle(el);
-                const isHidden = (
-                    style.display === 'none' ||
-                    style.visibility === 'hidden' ||
-                    style.opacity === '0' ||
-                    (style.maxHeight && style.maxHeight !== 'none' && parseInt(style.maxHeight) < 50 && el.innerText && el.innerText.trim().length > 20)
-                );
-                if (isHidden && el.innerText && el.innerText.trim().length > 10) {
-                    el.style.display = 'block';
-                    el.style.visibility = 'visible';
-                    el.style.opacity = '1';
-                    el.style.maxHeight = 'none';
-                    el.style.overflow = 'visible';
-                }
-            });
-            // Also click any "See More" / "Show more" buttons
-            document.querySelectorAll('a, button, span').forEach(el => {
-                const txt = (el.innerText || '').toLowerCase().trim();
-                if (txt === 'see more' || txt === 'show more' || txt === 'read more' || txt === 'ver más') {
-                    try { el.click(); } catch(e) {}
-                }
-            });
-        }""")
-    await page.wait_for_timeout(_budget(1500))
+    await page.evaluate("""() => {
+        // Force-show all hidden elements that contain text
+        document.querySelectorAll('*').forEach(el => {
+            const style = window.getComputedStyle(el);
+            const isHidden = (
+                style.display === 'none' ||
+                style.visibility === 'hidden' ||
+                style.opacity === '0' ||
+                (style.maxHeight && style.maxHeight !== 'none' && parseInt(style.maxHeight) < 50 && el.innerText && el.innerText.trim().length > 20)
+            );
+            if (isHidden && el.innerText && el.innerText.trim().length > 10) {
+                el.style.display = 'block';
+                el.style.visibility = 'visible';
+                el.style.opacity = '1';
+                el.style.maxHeight = 'none';
+                el.style.overflow = 'visible';
+            }
+        });
+        // Also click any "See More" / "Show more" buttons
+        document.querySelectorAll('a, button, span').forEach(el => {
+            const txt = (el.innerText || '').toLowerCase().trim();
+            if (txt === 'see more' || txt === 'show more' || txt === 'read more' || txt === 'ver más') {
+                try { el.click(); } catch(e) {}
+            }
+        });
+    }""")
+    await page.wait_for_timeout(1500)
 
     # ── Poll for body text to stabilize instead of a single fixed ──
     # sleep. Some sites (earthmom.org included) render their real
@@ -367,20 +294,16 @@ async def _extract_and_expand(page, deadline):
     # already resolved, so a fixed wait can grab the page mid-render.
     # Checking innerText length across a few short intervals and only
     # stopping once it holds steady (or we hit a small cap) catches
-    # that without slowing down pages that were already done. Also
-    # stops early if the deadline is nearly gone, rather than spending
-    # the full 6*800ms regardless.
+    # that without slowing down pages that were already done.
     previous_len = -1
     for _ in range(6):
-        if _remaining_ms(deadline) < 200:
-            break
         current_text = await page.evaluate(
             "() => document.body ? document.body.innerText.trim().length : 0"
         )
         if current_text == previous_len and current_text > 0:
             break
         previous_len = current_text
-        await page.wait_for_timeout(_budget(800))
+        await page.wait_for_timeout(800)
 
     html = await page.content()
     title = await page.title()
@@ -399,7 +322,7 @@ async def _extract_and_expand(page, deadline):
     return html, text, title
 
 
-async def _attempt(context, url, timeout, patient, deadline):
+async def _attempt(context, url, timeout, patient):
     """Runs a single navigation + extraction attempt on a fresh page.
     `patient` widens the wait strategy for the retry pass -- the first
     attempt tries to be quick (networkidle, falling back to
@@ -408,24 +331,12 @@ async def _attempt(context, url, timeout, patient, deadline):
     since a page that was too slow/thin on attempt 1 may just need
     more time rather than a different approach entirely.
 
-    Every wait below is bounded by whatever time is left before
-    `deadline`, on top of its own normal cap -- so a slow attempt 1
-    can no longer stack a full networkidle timeout, a full
-    domcontentloaded fallback, a full data-wait, AND full extraction
-    sleeps and still blow past the external subprocess kill-timeout
-    (see _DEADLINE_SAFETY_MARGIN_S above for the incident that showed
-    this). If the deadline is already gone before a stage would start,
-    that stage is skipped rather than attempted with a 0ms timeout.
-
     Returns (html, text, title, error, status, retry_after) -- status
     is the navigation response's HTTP status code (None if navigation
     itself raised), and retry_after is the parsed Retry-After response
     header in seconds when the server sent one (None otherwise), so a
     429 can be backed off for exactly as long as the server asked
     instead of a guessed delay."""
-
-    if _remaining_ms(deadline) < 500:
-        return "", "", "", "budget exhausted before navigation", None, None
 
     page = await context.new_page()
     try:
@@ -445,48 +356,34 @@ async def _attempt(context, url, timeout, patient, deadline):
             # mid-flight and no JSON ever printed -- exactly the bare
             # "Command [...] timed out after 75.0 seconds" failures with
             # no attempt1/attempt2 debug notes at all. Capping this at a
-            # small fixed budget (now ALSO bounded by the shared
-            # deadline, not just its own 12s cap) means a hung
-            # networkidle wait fails fast into the fallback instead of
-            # doubling the wait, and the fallback itself can't then go
-            # on to claim a second full `timeout` regardless of how
-            # much of the shared budget is already gone.
-            fast_networkidle_timeout = min(timeout, 12000, _remaining_ms(deadline))
-            if fast_networkidle_timeout < 500:
-                return "", "", "", "budget exhausted before networkidle attempt", None, None
+            # small fixed budget means a hung networkidle wait fails
+            # fast into the fallback instead of doubling the wait.
+            fast_networkidle_timeout = min(timeout, 12000)
             try:
                 response = await page.goto(url, timeout=fast_networkidle_timeout, wait_until="networkidle")
             except Exception:
-                fallback_timeout = min(timeout, _remaining_ms(deadline))
-                if fallback_timeout < 500:
-                    return "", "", "", "budget exhausted before domcontentloaded fallback", None, None
-                response = await page.goto(url, timeout=fallback_timeout, wait_until="domcontentloaded")
+                response = await page.goto(url, timeout=timeout, wait_until="domcontentloaded")
             # Give client-side-hydrated content (e.g. blinx.biz's
             # business record, loaded via a post-load XHR) a chance to
             # land before the fast pass extracts. This is a real signal
             # (selector presence), not a blind sleep -- see
             # _DATA_READY_SELECTOR above for why that matters.
-            await _wait_for_data(page, min(timeout, 8000, _remaining_ms(deadline)))
+            await _wait_for_data(page, min(timeout, 8000))
         else:
             # Retry pass: domcontentloaded first (less likely to itself
             # time out on pages with persistent background requests
             # like analytics/ads that never let networkidle fire), then
             # wait explicitly for the data-bearing selector with a much
             # longer budget before falling back to extraction regardless.
-            patient_nav_timeout = min(timeout, _remaining_ms(deadline))
-            if patient_nav_timeout < 500:
-                return "", "", "", "budget exhausted before patient navigation", None, None
-            response = await page.goto(url, timeout=patient_nav_timeout, wait_until="domcontentloaded")
-            data_arrived = await _wait_for_data(page, min(timeout, 20000, _remaining_ms(deadline)))
+            response = await page.goto(url, timeout=timeout, wait_until="domcontentloaded")
+            data_arrived = await _wait_for_data(page, min(timeout, 20000))
             if not data_arrived:
                 # Selector never showed up within budget -- give the
                 # page one more flat settle window as a last resort
                 # rather than extracting immediately on timeout.
-                settle_wait = min(3000, _remaining_ms(deadline))
-                if settle_wait > 0:
-                    await page.wait_for_timeout(settle_wait)
+                await page.wait_for_timeout(3000)
 
-        html, text, title = await _extract_and_expand(page, deadline)
+        html, text, title = await _extract_and_expand(page)
 
         status = response.status if response else None
         retry_after = None
@@ -531,11 +428,6 @@ _RATE_LIMIT_MAX_WAIT = 20.0  # cap even if Retry-After asks for longer
 async def scrape(url, timeout, ignore_https_errors=False):
     from playwright.async_api import async_playwright
     result = {"success": False, "html": "", "text": "", "title": "", "debug": ""}
-
-    # Set once, before the browser even launches, so browser-launch
-    # time counts against the budget too -- see _DEADLINE_SAFETY_MARGIN_S
-    # above for why this whole mechanism exists.
-    deadline = time.monotonic() + (timeout / 1000) + _DEADLINE_SAFETY_MARGIN_S
 
     own_domain = urlparse(url).netloc.lower()
     if own_domain.startswith("www."):
@@ -587,27 +479,16 @@ async def scrape(url, timeout, ignore_https_errors=False):
             # still exits after the normal 2 attempts exactly as
             # before -- only the 429 case gets the extra, delayed
             # retries, since that's the one case where waiting is
-            # actually expected to help. Every iteration now also
-            # checks the shared deadline first: once it's gone, the
-            # loop stops and reports that clearly instead of starting
-            # an attempt that has no realistic budget left to run in.
+            # actually expected to help.
             attempt_num = 0
             rate_limit_retries = 0
             ok = False
 
             while True:
-                remaining_s = _remaining_ms(deadline) / 1000
-                if remaining_s < 1:
-                    debug_notes.append(
-                        f"budget exhausted before attempt{attempt_num + 1} "
-                        f"({remaining_s:.1f}s left)"
-                    )
-                    break
-
                 attempt_num += 1
                 patient = attempt_num > 1
                 html, text, title, err, status, retry_after = await _attempt(
-                    context, url, timeout, patient=patient, deadline=deadline
+                    context, url, timeout, patient=patient
                 )
 
                 rate_limited = (not err) and _is_rate_limited(html, text, status)
@@ -643,10 +524,7 @@ async def scrape(url, timeout, ignore_https_errors=False):
 
                 if rate_limited and rate_limit_retries < len(_RATE_LIMIT_BACKOFFS):
                     wait_s = retry_after if retry_after else _RATE_LIMIT_BACKOFFS[rate_limit_retries]
-                    wait_s = min(wait_s, _RATE_LIMIT_MAX_WAIT, _remaining_ms(deadline) / 1000)
-                    if wait_s <= 0:
-                        debug_notes.append("budget exhausted, skipping rate-limit backoff wait")
-                        break
+                    wait_s = min(wait_s, _RATE_LIMIT_MAX_WAIT)
                     debug_notes.append(f"waiting {wait_s:.0f}s before retry (rate limited)")
                     await asyncio.sleep(wait_s)
                     rate_limit_retries += 1
@@ -662,12 +540,11 @@ async def scrape(url, timeout, ignore_https_errors=False):
             await browser.close()
 
             if not ok:
+                final_status = None
                 # Re-derive the terminal failure reason from the last
                 # debug note for the top-level message.
                 last_note = debug_notes[-1] if debug_notes else ""
-                if "budget exhausted" in last_note:
-                    result["debug"] = "Playwright: ran out of internal time budget | " + " | ".join(debug_notes)
-                elif "rate limited" in last_note:
+                if "rate limited" in last_note:
                     result["debug"] = (
                         "Playwright: rate limited (429), retries exhausted | "
                         + " | ".join(debug_notes)

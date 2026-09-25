@@ -5,26 +5,6 @@ Site parser: askmap.net
 from ..common import *  # noqa: F401,F403 -- see business_extractor/common.py
 
 
-# Generic site-template terms askmap.net stuffs into the <meta name="keywords">
-# tag on every single listing, regardless of what the business actually is
-# (they come from the map/route/trip-planner boilerplate around the listing,
-# not from the business itself). Stripped out so "Keywords" only reflects
-# the business-relevant terms (category, name, address).
-_ASKMAP_BOILERPLATE_KEYWORDS = {
-    "address details",
-    "roadmap",
-    "satellite map",
-    "phone number",
-    "business hours",
-    "trip",
-    "trip planner",
-    "travel",
-    "maps",
-    "location",
-    "venue",
-    "place",
-}
-
 
 def _askmap_section_container(soup, header_text):
     for h3 in soup.find_all("h3"):
@@ -51,24 +31,6 @@ def parse_askmap(url, html):
         og_title = soup.find("meta", property="og:title")
         if og_title and og_title.get("content"):
             business["Business Name"] = clean(og_title["content"]).split("|")[0].strip()
-
-    # ---- Country ----
-    # Rendered right under the <h1> as "in <a href=".../map.asp?...&city=X&
-    # country=Y">City, Country</a>". The href's `country` query param is
-    # more reliable than the link text (which can contain extra commas in
-    # multi-part city names), so prefer that and fall back to the last
-    # comma-separated piece of the visible text.
-    map_link = soup.select_one('a[href*="map.asp"][href*="country="]')
-    if map_link:
-        href = map_link.get("href", "")
-        query = parse_qs(urlparse(href).query)
-        country_vals = query.get("country")
-        if country_vals and clean(country_vals[0]):
-            business["Country"] = clean(country_vals[0])
-        else:
-            link_text = clean(map_link.get_text())
-            if "," in link_text:
-                business["Country"] = link_text.split(",")[-1].strip()
 
     # ---- Category ("<b>Category</b>: <span>value</span>" --
     for b_tag in soup.find_all("b"):
@@ -150,20 +112,12 @@ def parse_askmap(url, html):
             if is_meaningful(desc):
                 business["Description"] = desc
 
-    # ---- Keywords (meta keywords tag, stripped of generic site-template
-    # boilerplate that askmap.net appends to every listing -- see
-    # _ASKMAP_BOILERPLATE_KEYWORDS above) ----
+    # ---- Keywords (meta keywords tag) ----
     meta_kw = soup.find("meta", attrs={"name": "keywords"})
     if meta_kw:
         kw_raw = meta_kw.get("content", "")
         if is_meaningful(kw_raw):
-            kw_parts = [clean(part) for part in kw_raw.split(",")]
-            kw_parts = [
-                part for part in kw_parts
-                if part and part.lower() not in _ASKMAP_BOILERPLATE_KEYWORDS
-            ]
-            if kw_parts:
-                business["Keywords"] = ", ".join(kw_parts)
+            business["Keywords"] = clean(kw_raw)
 
     # ---- Logo (og:image -- matches the listing logo shown top-left) ----
     og_image = soup.find("meta", property="og:image")
@@ -171,3 +125,5 @@ def parse_askmap(url, html):
         business["Logo"] = urljoin(url, og_image["content"])
 
     return business
+
+

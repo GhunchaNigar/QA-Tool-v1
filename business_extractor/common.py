@@ -1,3 +1,14 @@
+"""
+Shared imports, constants, and helper functions used across every
+site parser in business_extractor.parsers.
+
+This module used to be the top of the monolithic extractor.py.
+Every parser file does `from ..common import *` to get all of this
+(regular expressions/BeautifulSoup imports, clean(), empty_business(),
+the bot-wall/cloudflare detectors, the fetchers, and the
+fields_config-driven filter_business_fields()).
+"""
+
 __all__ = [
     'json',
     're',
@@ -20,8 +31,6 @@ __all__ = [
     'IGNORE_CERT_ERRORS_DOMAINS',
     '_FINDUSHERE_EXCLUDED_LINK_DOMAINS',
     '_domain_needs_cert_bypass',
-    'SLOW_FETCH_TIMEOUTS_MS',
-    '_timeout_ms_for_domain',
     'SOCIAL_DOMAINS',
     '_hostname_matches_social_domain',
     'BLOCK_SIGNALS',
@@ -46,8 +55,6 @@ __all__ = [
     '_FIELD_EMPTY_DEFAULTS',
     '_empty_value_for',
     'filter_business_fields',
-    '_band_description_sections',
-    '_split_listings_gbd_address',
 ]
 
 import json
@@ -84,21 +91,6 @@ _FINDUSHERE_EXCLUDED_LINK_DOMAINS = (
     "ezoic.net",
 )
 
-# Domains known to be slow to fully load in Playwright (heavy JS,
-# slow origin servers, etc.) and that routinely blow past the default
-# 45s render budget -- e.g. supplyautonomy.com's business profile
-# pages were timing out at the default and surfacing a raw
-# "Command [...] timed out after 75.0 seconds" subprocess error
-# instead of a clean fetch. Give these domains a longer budget instead
-# of raising the default for every site.
-SLOW_FETCH_TIMEOUTS_MS = {
-    "supplyautonomy.com": 90000,
-    "zumvu.com": 90000,
-    "cake.me": 90000,
-    "gravitysplash.com": 90000,
-}
-
-
 def _split_address_allow_no_comma(address):
     """Like _split_blinx_address, but first checks for the no-street,
     no-comma "City State Zip" shape before falling back to the
@@ -112,6 +104,26 @@ def _split_address_allow_no_comma(address):
 
 
 def _split_city_state_zip_address(address):
+    """Split addresses with NO street segment, in either of two shapes:
+
+      (a) Comma-free "City State Zip" (e.g. "Plano TX 75023") -- used by
+          askmap.net, blogs.globalbusinessdirectory.us, place123.net,
+          milestones.business, earthmom.org, gravitysplash.com,
+          webforcompany.com, and local-biz.directory.
+
+      (b) Two comma-separated spans, "City State, Zip" (e.g.
+          preferredprofessionals.com renders <span>Plano TX</span>,
+          <span>75023</span> -> "Plano TX, 75023").
+
+    _split_blinx_address() assumes commas separate street/city/state-zip.
+    Shape (a) has no commas at all, so it lands in _split_blinx_address()
+    as one trailing "State Zip" token and mis-splits into
+    state="Plano TX", zipcode="75023", city="" (never populated). Shape
+    (b) fares no better: _split_blinx_address() takes street="Plano TX",
+    state_zip="75023" -- and since "75023" has no internal whitespace to
+    split on, that regex fails too, leaving state="75023" and city blank.
+    Detect both shapes directly here instead of falling through.
+    """
     address = address.strip()
 
     # Shape (a): comma-free "City State Zip".
@@ -131,44 +143,7 @@ def _split_city_state_zip_address(address):
     return _split_blinx_address(address)
 
 
-def _split_listings_gbd_address(address):
-    street, city, state, zipcode = "", "", "", ""
-
-    parts = [p.strip() for p in address.split(",") if p.strip()]
-
-    if len(parts) >= 2 and not re.search(r"\d", parts[-1]):
-        parts = parts[:-1]
-
-    if len(parts) >= 3:
-        street = ", ".join(parts[:-2])
-        city = parts[-2]
-        state_zip = parts[-1]
-    elif len(parts) == 2:
-        # parts[0] is often "<street> <city>" glued together with no
-        # comma between them (e.g. "2244 Faraday Ave #206 Carlsbad"),
-        # rather than being purely a city with no street. Reuse the
-        # same trailing-city splitter _split_blinx_address relies on
-        # for this shape, instead of dumping the whole run into City
-        # and leaving Street blank.
-        street, city = _split_trailing_city(parts[0])
-        state_zip = parts[1]
-    elif len(parts) == 1:
-        state_zip = parts[0]
-
-    # Match "<state> <zip>" with optional trailing junk (e.g. a country
-    # name glued on with no comma, as in "CA 94501 United States").
-    # State prefix is optional too, in case state_zip is zip-only.
-    match = re.match(
-        r"^(?:(?P<state>.*?)\s+)?(?P<zip>\d{5}(?:-\d{4})?)(?:\s+.*)?$",
-        state_zip.strip(),
-    )
-    if match:
-        state = (match.group("state") or "").strip()
-        zipcode = match.group("zip")
-    else:
-        state = state_zip.strip()
-
-    return street, city, state, zipcode
+    
 
 def _decode_cf_email(hex_string):
     """Decode Cloudflare's [email protected] obfuscation.
@@ -195,23 +170,7 @@ def _decode_cf_email(hex_string):
     except UnicodeDecodeError:
         return ""
 
-def _band_description_sections(description, labels=None):
-    if not description:
-        return {}
 
-    labels = labels or _BAND_DESCRIPTION_LABELS
-    canonical_by_lower = {label.lower(): label for label in labels}
-    label_pattern = "|".join(re.escape(l) for l in labels)
-    matches = list(re.finditer(rf"(?:^|\n)({label_pattern}):?\n?", description, flags=re.I))
-
-    sections = {}
-    for i, m in enumerate(matches):
-        start = m.end()
-        end = matches[i + 1].start() if i + 1 < len(matches) else len(description)
-        canonical_label = canonical_by_lower[m.group(1).lower()]
-        sections[canonical_label] = clean(description[start:end])
-    return sections
-    
 def _find_cf_email(soup):
     # Form 1: <a href="/cdn-cgi/l/email-protection#HEX">
     link = soup.select_one('a[href*="/cdn-cgi/l/email-protection#"]')
@@ -230,63 +189,6 @@ def _find_cf_email(soup):
 
     return ""
 
-
-# Tokens that signal "this is still part of the street, not the city"
-# when walking backward through an ambiguous "<street> <city>" run
-# (see _split_trailing_city below): unit/suite markers, street-type
-# suffixes, and directional abbreviations. Matched case-insensitively
-# against each token with trailing punctuation stripped.
-_STREET_SUFFIX_STOPWORDS = {
-    "st", "st.", "street", "ave", "ave.", "avenue", "blvd", "blvd.",
-    "boulevard", "dr", "dr.", "drive", "rd", "rd.", "road", "ln", "ln.",
-    "lane", "way", "ct", "ct.", "court", "pl", "pl.", "place", "pkwy",
-    "pkwy.", "parkway", "cir", "cir.", "circle", "hwy", "hwy.",
-    "highway", "ter", "ter.", "terrace", "trl", "trl.", "trail",
-    "n", "s", "e", "w", "ne", "nw", "se", "sw", "n.", "s.", "e.", "w.",
-    "suite", "ste", "ste.", "apt", "apt.", "unit", "#",
-}
-
-
-def _split_trailing_city(text):
-    """Best-effort split of a "<street> <city>" run that has NO comma
-    between the street and the city (e.g. "2244 Faraday Ave #206
-    Carlsbad") into (street, city).
-
-    Walks backward from the end of `text`, taking alphabetic,
-    capitalized-looking tokens as part of the city, and stops at the
-    first token that looks like it's still part of the street: a
-    number, a "#206"-style unit marker, or a street-type
-    suffix/direction ("Ave", "Blvd", "Suite", "N", ...).
-
-    Returns (text, "") -- i.e. nothing recovered, the whole run stays
-    "street" -- if no trailing city-like tokens are found (e.g. the
-    run really is just a street with no city attached). Returns
-    ("", text) if every token looked like part of a city (e.g. the
-    run is a bare city name like "Springfield" with no street at all).
-    """
-    tokens = text.split()
-    city_tokens = []
-    i = len(tokens) - 1
-    while i >= 0:
-        tok = tokens[i]
-        bare = tok.strip(".,").lower()
-        if not re.match(r"^[A-Za-z][A-Za-z'.-]*$", tok) or bare in _STREET_SUFFIX_STOPWORDS:
-            break
-        city_tokens.insert(0, tok)
-        i -= 1
-
-    if i < 0:
-        # Every token looked like part of a city name -- there's no
-        # street component to peel off.
-        return "", text
-    if not city_tokens:
-        return text, ""
-
-    street = " ".join(tokens[:i + 1])
-    city = " ".join(city_tokens)
-    return street, city
-
-
 def _split_blinx_address(address):
     street, city, state, zipcode = "", "", "", ""
 
@@ -297,12 +199,7 @@ def _split_blinx_address(address):
         city = parts[-2]
         state_zip = parts[-1]
     elif len(parts) == 2:
-        # parts[0] is often "<street> <city>" glued together with no
-        # comma between them (e.g. "2244 Faraday Ave #206 Carlsbad"),
-        # rather than being purely a street with no city. Try to peel
-        # a trailing city name off of it instead of dumping the whole
-        # thing into "street" and leaving city blank.
-        street, city = _split_trailing_city(parts[0])
+        street = parts[0]
         state_zip = parts[1]
     elif len(parts) == 1:
         state_zip = parts[0]
@@ -315,19 +212,6 @@ def _split_blinx_address(address):
         zipcode = match.group(2).strip()
     else:
         state = state_zip.strip()
-
-    # Defensive fallback: if the state/zip regex above didn't match
-    # (state_zip was empty, or shaped in some way we don't otherwise
-    # handle -- e.g. a comma-free address, or trailing junk after the
-    # zip like "CA 92008 USA" that isn't already covered), don't just
-    # silently drop the zip code. Scan the ORIGINAL address string for
-    # a standalone 5-digit (optionally +4) run and use that as a last
-    # resort, so a zip is never lost purely because the rest of the
-    # address didn't fit one of the shapes above.
-    if not zipcode:
-        zip_match = re.search(r"\b(\d{5}(?:-\d{4})?)\b", address)
-        if zip_match:
-            zipcode = zip_match.group(1)
 
     return street, city, state, zipcode
 
@@ -380,27 +264,6 @@ def _domain_needs_cert_bypass(url):
     if domain.startswith("www."):
         domain = domain[4:]
     return any(domain == d or domain.endswith("." + d) for d in IGNORE_CERT_ERRORS_DOMAINS)
-
-
-def _timeout_ms_for_domain(url, requested_timeout_ms):
-    """Look up a per-domain minimum render timeout for slow sites
-    (see SLOW_FETCH_TIMEOUTS_MS) and return whichever is larger: the
-    caller's requested timeout, or the domain's known-slow override.
-    Callers that explicitly ask for a longer timeout than the override
-    are never shortened."""
-    domain = urlparse(url).netloc.lower().split(":")[0]
-    if domain.startswith("www."):
-        domain = domain[4:]
-
-    override_ms = None
-    for slow_domain, ms in SLOW_FETCH_TIMEOUTS_MS.items():
-        if domain == slow_domain or domain.endswith("." + slow_domain):
-            override_ms = ms
-            break
-
-    if override_ms is None:
-        return requested_timeout_ms
-    return max(requested_timeout_ms, override_ms)
 
 
 SOCIAL_DOMAINS = {
@@ -553,13 +416,6 @@ def fetch_via_requests(url):
 
 
 def fetch_via_playwright(url, worker_path="playwright_worker.py", timeout_ms=45000):
-    # Slow sites (see SLOW_FETCH_TIMEOUTS_MS) get a longer render
-    # budget than the default -- e.g. supplyautonomy.com's profile
-    # pages were blowing past the default 45s and hitting the
-    # subprocess-level timeout below before Playwright even had a
-    # chance to time out cleanly on its own.
-    timeout_ms = _timeout_ms_for_domain(url, timeout_ms)
-
     ignore_https_errors = _domain_needs_cert_bypass(url)
     proc = subprocess.run(
         [sys.executable, worker_path, url, str(timeout_ms), str(int(ignore_https_errors))],

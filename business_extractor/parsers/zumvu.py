@@ -42,30 +42,11 @@ def parse_zumvu(url, html):
 
         addr = entity.get("address", {})
         if isinstance(addr, dict):
-            street = addr.get("streetAddress", "")
-            city = addr.get("addressLocality", "")
-            state = addr.get("addressRegion", "")
-            zipcode = addr.get("postalCode", "")
-            country = addr.get("addressCountry", "")
-
-            # Zumvu's JSON-LD template sometimes dumps the *entire*
-            # address ("131 Continental Dr, Suite 305, Newark,
-            # Delaware 19713") into streetAddress alone, leaving
-            # addressLocality/addressRegion/postalCode blank. Detect
-            # that and split streetAddress ourselves instead of
-            # letting the whole blob land in Street.
-            if street and not (city and state and zipcode):
-                split_street, split_city, split_state, split_zip = _split_blinx_address(street)
-                street = split_street
-                city = city or split_city
-                state = state or split_state
-                zipcode = zipcode or split_zip
-
-            business["Street"] = street or business["Street"]
-            business["City"] = city or business["City"]
-            business["State"] = state or business["State"]
-            business["Zipcode"] = zipcode or business["Zipcode"]
-            business["Country"] = country or business["Country"]
+            business["Street"] = addr.get("streetAddress", business["Street"])
+            business["City"] = addr.get("addressLocality", business["City"])
+            business["State"] = addr.get("addressRegion", business["State"])
+            business["Zipcode"] = addr.get("postalCode", business["Zipcode"])
+            business["Country"] = addr.get("addressCountry", business["Country"])
 
         knows_about = entity.get("knowsAbout")
         if knows_about and isinstance(knows_about, list):
@@ -153,18 +134,6 @@ def parse_zumvu(url, html):
                 # e.g. "Dover, Delaware 19901, UNITED STATES"
                 business["City"] = lines[1]
 
-    # ---- Country fallback (visible map-marker line under the business
-    #      name, e.g. "USA" -- JSON-LD address.addressCountry is often
-    #      simply absent from this template's mainEntity block) ----
-    if not business["Country"]:
-        for li in soup.select("ul.profileaddrss li"):
-            icon = li.find("i")
-            if icon and "fa-map-marker" in icon.get("class", []):
-                country_text = clean(li.get_text())
-                if is_meaningful(country_text):
-                    business["Country"] = country_text
-                break
-
     # ---- Logo fallback (og:image) ----
     if not business["Logo"]:
         og_image = soup.find("meta", property="og:image")
@@ -188,20 +157,14 @@ def parse_zumvu(url, html):
         if crumbs:
             business["Category"] = crumbs[-1]
 
-    # ---- Social Media (real anchors, in case JSON-LD sameAs was empty)
-    #      Scoped to the business's own content column (#reslt /
-    #      .proleftcol). Scanning the whole page picks up Zumvu's own
-    #      corporate social accounts from the site header's
-    #      ".social-home" block (facebook.com/zumvu, twitter.com/zumvu,
-    #      pinterest.com/zumvu) and misattributes them to every listing
-    #      that has no real sameAs links of its own -- those accounts
-    #      don't contain "zumvu.com" in the href, so the existing
-    #      "zumvu.com not in href" filter doesn't catch them. ----
-    social_scope = soup.select_one("#reslt") or soup.select_one(".proleftcol") or soup
-    for a in social_scope.find_all("a", href=True):
+    # ---- Social Media (real anchors, in case JSON-LD sameAs was empty) ----
+    for a in soup.find_all("a", href=True):
         href = a["href"]
         for domain, network in SOCIAL_DOMAINS.items():
             if domain in href.lower() and "zumvu.com" not in href.lower():
                 business["Social Media Links"][network] = href
 
     return business
+
+
+
