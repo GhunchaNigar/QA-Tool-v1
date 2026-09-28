@@ -238,6 +238,29 @@ async def _extract_and_expand(page):
     Split out from scrape() so it can be reused across retry attempts
     without duplicating this logic."""
 
+    # ── ProvenExpert / ProvenEmployer opening hours ─────────────────
+    # #profilesOpening is sent empty and filled by the site's own JS
+    # (Profile.setProfileOpeningHours) after load. Wait until it has
+    # text, then click "Display all times" so every day is in the DOM.
+    # No-op on every other site (the element doesn't exist there).
+    try:
+        if await page.query_selector("#profilesOpening"):
+            try:
+                await page.wait_for_function(
+                    "() => { const e = document.querySelector('#profilesOpening');"
+                    " return e && e.innerText.trim().length > 0; }",
+                    timeout=15000,
+                )
+            except Exception:
+                pass
+            await page.evaluate("""() => {
+                const a = document.querySelector('#showAllOpeningTimes a');
+                if (a) { try { a.click(); } catch (e) {} }
+            }""")
+            await page.wait_for_timeout(800)
+    except Exception:
+        pass
+
     # ── Scroll entire page to trigger lazy-loaded images and content ──
     await page.wait_for_timeout(2000)
     await page.evaluate("""async () => {
@@ -631,7 +654,11 @@ if __name__ == "__main__":
     # with a replace-on-error fallback, so this print can no longer
     # crash the way it did before.
     try:
-        print(json.dumps(result, ensure_ascii=False))
+        # ensure_ascii=True escapes every non-ASCII character (including
+        # U+2028/U+2029/U+0085, which str.splitlines() treats as line
+        # breaks), so the result is guaranteed to be ONE line of JSON.
+        # The reader decodes the escapes back to the original text.
+        print(json.dumps(result, ensure_ascii=True))
     except UnicodeEncodeError:
         # Last-resort fallback if reconfigure() itself wasn't available
         # (e.g. very old Python) -- escape non-ASCII rather than lose

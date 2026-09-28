@@ -6,6 +6,13 @@ from ..common import *  # noqa: F401,F403 -- see business_extractor/common.py
 
 
 
+def _is_zumvu_own_social(href):
+    """Zumvu's own footer/profile links (facebook.com/zumvu, twitter.com/zumvu,
+    pinterest.com/zumvu ...). The old "zumvu.com not in href" test never caught
+    these because the handle is a path segment on the social site's domain."""
+    return bool(re.search(r"/zumvu/?(?:[?#].*)?$", href.strip().lower()))
+
+
 def parse_zumvu(url, html):
 
     soup = BeautifulSoup(html, "lxml")
@@ -58,9 +65,21 @@ def parse_zumvu(url, html):
             links = entity["sameAs"]
             if isinstance(links, list):
                 for link in links:
+                    link = link.strip()
+                    if _is_zumvu_own_social(link):
+                        continue
                     for domain, name in SOCIAL_DOMAINS.items():
                         if domain in link.lower():
                             business["Social Media Links"][name] = link
+
+    # ---- Address: JSON-LD sometimes puts the ENTIRE address in streetAddress
+    # ("1903 S. Congress Ave, Suite 180, Boynton Beach, FL 33426") and leaves
+    # city/state/zip empty -- split it, same helper the other sources use. ----
+    if business["Street"] and not (business["City"] or business["State"] or business["Zipcode"]) \
+            and business["Street"].count(",") >= 2:
+        street, city, state, zipcode = _split_blinx_address(clean(business["Street"]))
+        business["Street"], business["City"] = street, city
+        business["State"], business["Zipcode"] = state, zipcode
 
     # ---- Business Name fallback (visible <h1>) ----
     if not business["Business Name"]:
@@ -159,12 +178,11 @@ def parse_zumvu(url, html):
 
     # ---- Social Media (real anchors, in case JSON-LD sameAs was empty) ----
     for a in soup.find_all("a", href=True):
-        href = a["href"]
+        href = a["href"].strip()
+        if _is_zumvu_own_social(href):
+            continue
         for domain, network in SOCIAL_DOMAINS.items():
             if domain in href.lower() and "zumvu.com" not in href.lower():
                 business["Social Media Links"][network] = href
 
     return business
-
-
-

@@ -5,6 +5,7 @@ This is the only place that needs to change when a new site parser is
 added: import the new parsers.<module> and add one line to SITE_PARSERS.
 """
 
+import sys
 from urllib.parse import urlparse
 
 import requests
@@ -147,6 +148,33 @@ def extract_business(url, worker_path="playwright_worker.py"):
         if blocked:
             # Unmapped/blocked site -- retry via Playwright automatically
             html = fetch_via_playwright(url, worker_path=worker_path)
+        else:
+            # Parsers can opt in to a rendered re-fetch when the plain HTML
+            # is missing JS-loaded content (e.g. ProvenExpert opening
+            # hours) by exposing a needs_render(html) -> bool attribute.
+            # Only those pages pay the Playwright cost.
+            needs_render = getattr(parser, "needs_render", None)
+            if needs_render is not None:
+                try:
+                    wants_render = needs_render(html)
+                except Exception:
+                    wants_render = False
+                if wants_render:
+                    try:
+                        rendered = fetch_via_playwright(url, worker_path=worker_path)
+                        if rendered and not _looks_blocked(rendered):
+                            html = rendered
+                            if needs_render(rendered):
+                                print(f"[render] {url}: page rendered but JS "
+                                      f"content still empty", file=sys.stderr)
+                        else:
+                            print(f"[render] {url}: rendered page empty/blocked, "
+                                  f"using plain HTML", file=sys.stderr)
+                    except Exception as e:
+                        # Keep the plain HTML so the other fields still parse,
+                        # but say why the rendered fetch didn't happen.
+                        print(f"[render] {url}: Playwright re-fetch failed: {e}",
+                              file=sys.stderr)
     else:
         html = fetch_via_playwright(url, worker_path=worker_path)
 

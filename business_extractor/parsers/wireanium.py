@@ -40,8 +40,22 @@ def parse_wireanium(url, html):
             business["City"] = clean(addr_spans[0].get_text())
             business["State"] = clean(addr_spans[1].get_text())
             business["Zipcode"] = clean(addr_spans[2].get_text())
+        elif len(addr_spans) == 2:
+            # City + region only (no street, no postcode) -- e.g. UK listings
+            # rendering "Chippenham, England<br>United Kingdom".
+            business["City"] = clean(addr_spans[0].get_text())
+            business["State"] = clean(addr_spans[1].get_text())
+        elif len(addr_spans) == 1:
+            business["City"] = clean(addr_spans[0].get_text())
         elif not business["Street"]:
-            addr_text = clean(addr_container.get_text())
+            # No spans at all: use only the text BEFORE the first <br> so the
+            # trailing country line is never glued onto Street.
+            first_line = []
+            for node in addr_container.contents:
+                if getattr(node, "name", None) == "br":
+                    break
+                first_line.append(node.get_text() if hasattr(node, "get_text") else str(node))
+            addr_text = clean("".join(first_line))
             if is_meaningful(addr_text):
                 business["Street"] = addr_text
 
@@ -117,8 +131,8 @@ def parse_wireanium(url, html):
         if is_meaningful(cat_text):
             business["Category"] = cat_text
 
-    # ---- Social Media Links (opportunistic; not every listing on this
-    # source publishes any) ----
+    # ---- Social Media Links (opportunistic; not every listing publishes
+    # any) ----
     social_links = {}
     for a in soup.select(".table-display-social_media_links a[href]"):
         href = a.get("href", "")
@@ -137,14 +151,7 @@ def parse_wireanium(url, html):
         if og_image and og_image.get("content"):
             business["Logo"] = urljoin(url, og_image["content"])
 
-    # ---- Business Email (opportunistic; not every listing publishes one) ----
-    cf_email = _find_cf_email(soup)
-    if cf_email:
-        business["Business Email"] = cf_email
-    if not business["Business Email"]:
-        mailto = soup.select_one('a[href^="mailto:"]')
-        if mailto and mailto.get("href"):
-            business["Business Email"] = mailto["href"].replace("mailto:", "").split("?")[0].strip()
+    # ---- Business Email: intentionally NOT extracted for this source ----
 
     # ---- GBP Link (scoped to the "Get Directions" anchor) ----
     directions = soup.select_one("a.get-directions-link[href]")
@@ -152,5 +159,3 @@ def parse_wireanium(url, html):
         business["GBP Link"] = directions["href"]
 
     return business
-
-

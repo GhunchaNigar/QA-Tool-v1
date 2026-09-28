@@ -16,6 +16,33 @@ _MYM_ADDRESS_RE = re.compile(
 )
 
 
+def _mym_address_text(addr_el):
+    """Address box text with its pieces joined by ", ".
+
+    The box usually holds one span ("9716 Rea Rd Suite B #1101, Charlotte,
+    NC 28277"), but service-area listings split it across spans separated
+    by <br> (<span>Serving</span><br><span>Bowie, MD 20715</span>).
+    get_text() with no separator glued those into "ServingBowie, MD 20715",
+    which matched no pattern and landed whole in Street."""
+    if not addr_el:
+        return ""
+    parts = [clean(t).strip(" ,") for t in addr_el.stripped_strings]
+    return ", ".join(p for p in parts if p)
+
+
+def _mym_hours_row(soup):
+    """Value of any table row whose label mentions hours (e.g. the
+    "Hours of Operation" row in Company Details), or ''."""
+    for row in soup.select(".table-view-group"):
+        label = row.select_one(".col-sm-4")
+        value = row.select_one(".col-sm-8")
+        if label and value and "hours" in clean(label.get_text()).lower():
+            text = clean(value.get_text(" "))
+            if text:
+                return text
+    return ""
+
+
 def _meetyourmarkets_jsonld_local_business(soup):
     """Return the LocalBusiness node from this page's JSON-LD "@graph"
     array, or {} if none is present/parseable. There are usually two
@@ -63,7 +90,7 @@ def parse_meetyourmarkets(url, html):
     # placeholder "N/A" rather than leaving them blank, so those can't be
     # trusted and the visible text has to be parsed instead) ----
     addr_el = soup.select_one(".overview-tab-the-member-address .col-sm-8")
-    addr_text = clean(addr_el.get_text()) if addr_el else ""
+    addr_text = _mym_address_text(addr_el)
     match = _MYM_ADDRESS_RE.match(addr_text) if addr_text else None
     if match:
         business["Street"] = match.group("street").strip()
@@ -123,6 +150,8 @@ def parse_meetyourmarkets(url, html):
         hours_text = clean(hours_el.get_text())
         if is_meaningful(hours_text):
             business["Hours"] = hours_text
+    if not business["Hours"]:
+        business["Hours"] = _mym_hours_row(soup)
 
     # ---- Category ----
     category_el = soup.select_one(".profile-header-top-category")
@@ -194,7 +223,7 @@ def parse_countrypwr(url, html):
     # rather than leaving them blank, so those can't be trusted and the
     # visible text has to be parsed instead) ----
     addr_el = soup.select_one(".overview-tab-the-member-address .col-sm-8")
-    addr_text = clean(addr_el.get_text()) if addr_el else ""
+    addr_text = _mym_address_text(addr_el)
     match = _MYM_ADDRESS_RE.match(addr_text) if addr_text else None
     if match:
         business["Street"] = match.group("street").strip()
@@ -253,6 +282,8 @@ def parse_countrypwr(url, html):
         hours_text = clean(hours_el.get_text())
         if is_meaningful(hours_text):
             business["Hours"] = hours_text
+    if not business["Hours"]:
+        business["Hours"] = _mym_hours_row(soup)
 
     # ---- Category ----
     category_el = soup.select_one(".profile-header-top-category")
@@ -313,7 +344,7 @@ def parse_bizmakersamerica(url, html):
     # leaving them blank, so those can't be trusted and the visible text
     # has to be parsed instead) ----
     addr_el = soup.select_one(".overview-tab-the-member-address .col-sm-8")
-    addr_text = clean(addr_el.get_text()) if addr_el else ""
+    addr_text = _mym_address_text(addr_el)
     match = _MYM_ADDRESS_RE.match(addr_text) if addr_text else None
     if match:
         business["Street"] = match.group("street").strip()
@@ -371,6 +402,8 @@ def parse_bizmakersamerica(url, html):
         hours_text = clean(hours_el.get_text())
         if is_meaningful(hours_text):
             business["Hours"] = hours_text
+    if not business["Hours"]:
+        business["Hours"] = _mym_hours_row(soup)
 
     # ---- Category ----
     category_el = soup.select_one(".profile-header-top-category")
@@ -389,5 +422,3 @@ def parse_bizmakersamerica(url, html):
             business["Logo"] = urljoin(url, og_image["content"])
 
     return business
-
-

@@ -276,7 +276,7 @@ SOURCE_FIELDS = {
     "wireanium.com": [
         "Name", "Street", "City", "State", "Zipcode", "Country",
         "Phone", "Website URL", "Description", "Hours",
-        "Social Media Links", "Business Email", "GBP Link",
+        "Social Media Links", "GBP Link",
         "Category", "Logo",
     ],
     "locuul.com": [

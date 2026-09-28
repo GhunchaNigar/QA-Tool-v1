@@ -22,6 +22,10 @@ from ..common import (
     urljoin,
     SOCIAL_DOMAINS,
     _hostname_matches_social_domain,
+    _extract_pe_cover,
+    _extract_pe_hours,
+    _extract_pe_gallery,
+    pe_hours_need_render,
 )
 
 # Sharing-widget URL fragments that must NOT be treated as the business's
@@ -44,43 +48,91 @@ def _is_share_widget_link(href):
     return any(marker in href for marker in _SHARE_WIDGET_URL_MARKERS)
 
 
-def _parse_address_block(address_tag):
-    """Split the <address> block's stripped text nodes into
-    street/city/state/zipcode/country.
+_ZIP_TOKEN_RE = re.compile(r"^(?=.*\d)[A-Z0-9]{3,8}(?:-[A-Z0-9]{3,4})?$", re.I)
 
-    Observed shape (see haqq-legal-ai2 profile): a flat run of text nodes
-    with no per-field markup --
-        ["8 The Green", "Dover,", "Delaware (DE)", "19901", "United States of America"]
-    -- so this peels fields off the END of the list, since country and
-    zipcode are the most reliably identifiable tokens (last item is always
-    the country; the item before it is a zipcode if it contains a digit).
-    State is unwrapped from its trailing "(ABBR)" when present, otherwise
-    kept as-is. Whatever remains at the front is the street.
+
+def _split_locality(text):
+    """Split the locality line(s) into (city, state, zipcode).
+
+    Handles both layouts seen on ProvenEmployer:
+        US:  "Dover, Delaware (DE) 19901"     -> Dover / DE / 19901
+        AU:  "3207 Port Melbourne ,VIC"        -> Port Melbourne / VIC / 3207
+    The zipcode can lead or trail; the state is either a "(ABBR)" token or
+    whatever follows the last comma.
     """
-    parts = list(address_tag.stripped_strings)
-    if not parts:
-        return "", "", "", "", ""
+    text = clean(text)
+    if not text:
+        return "", "", ""
 
-    country = parts[-1]
-    parts = parts[:-1]
-
+    tokens = text.split()
     zipcode = ""
-    if parts and len(parts[-1]) <= 12 and re.search(r"\d", parts[-1]):
-        zipcode = parts[-1]
-        parts = parts[:-1]
+    # Postcode first (AU/EU style) ...
+    if tokens and _ZIP_TOKEN_RE.match(tokens[0]):
+        zipcode = tokens.pop(0)
+    # ... or last (US style).
+    elif tokens and _ZIP_TOKEN_RE.match(tokens[-1]):
+        zipcode = tokens.pop()
+    rest = " ".join(tokens)
 
     state = ""
-    if parts:
-        state_match = re.search(r"\(([^)]+)\)", parts[-1])
-        state = state_match.group(1) if state_match else parts[-1]
-        parts = parts[:-1]
+    paren = re.search(r"\(([^)]+)\)", rest)
+    if paren:
+        state = paren.group(1).strip()
+        before = rest[:paren.start()].strip().rstrip(",").strip()
+        # "Dover, Delaware" -> city is the part before the comma
+        city = before.split(",")[0].strip() if "," in before else before
+    elif "," in rest:
+        city, _, state = rest.rpartition(",")
+        city, state = city.strip().rstrip(",").strip(), state.strip()
+    else:
+        city = rest.strip()
 
-    city = ""
-    if parts:
-        city = parts[-1].rstrip(",").strip()
-        parts = parts[:-1]
+    return clean(city), clean(state), zipcode
 
-    street = clean(" ".join(parts))
+
+def _parse_address_block(address_tag):
+    """Split the <address> block into street/city/state/zipcode/country.
+
+    Template shape:
+        <address>
+            {street}<br>
+            <div> {zip} {city} ,{state} ... <br></div>   <- locality
+            {country}<br>
+        </address>
+
+    The inner <div> separates street (text before it) from country (text
+    after it), so that structure is used when present. A flat text-node
+    heuristic is kept as the fallback for pages without the <div>.
+    """
+    locality_div = address_tag.find("div")
+    if locality_div:
+        street_parts, country_parts = [], []
+        target = street_parts
+        for node in address_tag.children:
+            if node is locality_div:
+                target = country_parts
+                continue
+            text = node.get_text(" ") if hasattr(node, "get_text") else str(node)
+            text = clean(text)
+            if text:
+                target.append(text)
+
+        city, state, zipcode = _split_locality(" ".join(locality_div.stripped_strings))
+        return (
+            clean(" ".join(street_parts)),
+            city,
+            state,
+            zipcode,
+            clean(" ".join(country_parts)),
+        )
+
+    # ---- Fallback: flat list of text nodes ----
+    parts = [clean(p) for p in address_tag.stripped_strings if clean(p)]
+    if not parts:
+        return "", "", "", "", ""
+    country = parts.pop() if len(parts) > 1 else ""
+    street = parts.pop(0) if len(parts) > 1 else ""
+    city, state, zipcode = _split_locality(" ".join(parts))
     return street, city, state, zipcode, country
 
 
@@ -170,13 +222,18 @@ def parse_provenemployer(url, html):
         if avatar_tag and avatar_tag.get("src"):
             business["Logo"] = urljoin(url, avatar_tag["src"])
 
-    # Photo gallery -- empty on listings (like this one) that haven't
-    # uploaded any; #slideshowContainer holds <img> tags when populated.
+    hours = _extract_pe_hours(soup)
+    if hours:
+        business["Hours"] = hours
+
+    # Photos: cover image first, then any gallery/slideshow images.
     photos = []
-    slideshow = soup.select_one("#slideshowContainer")
-    if slideshow:
-        for img in slideshow.select("img[src]"):
-            photos.append(urljoin(url, img["src"]))
+    cover = _extract_pe_cover(soup, url)
+    if cover:
+        photos.append(cover)
+    for src in _extract_pe_gallery(soup, url):
+        if src not in photos:
+            photos.append(src)
     business["Photos"] = photos
 
     # Social Media Links: scoped to the business's own "about" content so
@@ -196,3 +253,7 @@ def parse_provenemployer(url, html):
         business["Social Media Links"] = social_links
 
     return business
+
+
+# Same JS-loaded hours widget as provenexpert.com.
+parse_provenemployer.needs_render = pe_hours_need_render

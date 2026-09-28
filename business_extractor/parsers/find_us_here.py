@@ -26,21 +26,46 @@ def parse_findushere(url, html):
     page_text = soup.get_text("\n")
 
     # ---- Address (Street / City / State / Zipcode) ----
-    addr_match = re.search(r"\bAddress\b\s*\n(.*?)\n\s*Phone\b", page_text, re.S)
-    if addr_match:
-        addr_lines = [clean(line) for line in addr_match.group(1).split("\n")]
-        addr_lines = [line for line in addr_lines if line]
-        if addr_lines and re.fullmatch(r"\d{5}(-\d{4})?", addr_lines[-1]):
-            business["Zipcode"] = addr_lines.pop()
-        if addr_lines:
-            business["State"] = addr_lines.pop()
-        if addr_lines:
-            business["City"] = addr_lines.pop()
-        if addr_lines:
-            business["Street"] = " ".join(addr_lines)
+    # The address block is marked up with schema.org itemprops
+    # (streetAddress, addressLocality, addressRegion, postalCode), so read
+    # those directly -- this works for every country's format.
+    addr_scope = soup.select_one('[itemprop="address"]') or soup
+    itemprop_map = {
+        "streetAddress": "Street",
+        "addressLocality": "City",
+        "addressRegion": "State",
+        "postalCode": "Zipcode",
+    }
+    for prop, field in itemprop_map.items():
+        el = addr_scope.select_one(f'[itemprop="{prop}"]')
+        if el:
+            business[field] = clean(el.get_text(" ")).strip(" ,")
 
-    # ---- Country ----
-    h2 = soup.find("h2")
+    # Fallback: split the text lines between "Address" and "Phone". The zip
+    # check accepts any postcode shape (US 12345 / 12345-6789, AU 2567,
+    # UK SW1A 1AA, CA K1A 0B1), not only 5-digit US zips -- a 4-digit AU
+    # postcode used to be missed, shifting every field up by one.
+    if not (business["Street"] or business["City"]):
+        addr_match = re.search(r"\bAddress\b\s*\n(.*?)\n\s*Phone\b", page_text, re.S)
+        if addr_match:
+            addr_lines = [clean(line) for line in addr_match.group(1).split("\n")]
+            addr_lines = [line for line in addr_lines if line]
+            if addr_lines and re.fullmatch(
+                r"(?=.*\d)[A-Za-z0-9]{3,5}(?:[ -][A-Za-z0-9]{3,4})?", addr_lines[-1]
+            ):
+                business["Zipcode"] = addr_lines.pop()
+            if addr_lines:
+                business["State"] = addr_lines.pop()
+            if addr_lines:
+                business["City"] = addr_lines.pop()
+            if addr_lines:
+                business["Street"] = " ".join(addr_lines)
+
+    # ---- Country (itemprop meta, else last word of the header <h2>) ----
+    country_meta = soup.select_one('[itemprop="addressCountry"]')
+    if country_meta:
+        business["Country"] = clean(country_meta.get("content") or country_meta.get_text())
+    h2 = None if business["Country"] else soup.find("h2")
     if h2:
         tokens = clean(h2.get_text()).split()
         if tokens:
@@ -116,5 +141,3 @@ def parse_findushere(url, html):
         business["Logo"] = urljoin(url, og_image["content"])
 
     return business
-
-

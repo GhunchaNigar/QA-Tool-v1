@@ -95,13 +95,30 @@ def parse_yplocal(url, html):
                 business["Keywords"] = kw_text
             break
 
+    # ---- Hours ("Hours of Operation" row in Company Details, also
+    #      repeated on a second tab) ----
+    for row in soup.select(".table-view-group"):
+        label = row.select_one(".col-sm-4")
+        value = row.select_one(".col-sm-8")
+        if not (label and value):
+            continue
+        if "hours" in clean(label.get_text()).lower():
+            hours_text = clean(value.get_text(" "))
+            if is_meaningful(hours_text):
+                business["Hours"] = hours_text
+                break
+
     # ---- Address (single unstructured string -> Street/City/State/Zip) ----
-    # The address container holds multiple sibling <span> elements (e.g.
-    # <span>Plano TX</span>, <span>75023</span>) -- selecting just the
-    # first <span> drops everything after it (the zip code). Pull the
-    # whole container's text instead.
+    # The pieces sit in separate <span>s, sometimes split by <br> (e.g.
+    # <span>Serving</span><br><span>Bowie, MD 20715</span>, or
+    # <span>Plano TX</span>, <span>75023</span>). get_text() with no
+    # separator glues them together ("ServingBowie, MD 20715"), so join
+    # the pieces with ", " and let the patterns below split them.
     addr_container = soup.select_one(".overview-tab-the-member-address .col-sm-8")
-    addr_text = clean(addr_container.get_text()) if addr_container else ""
+    addr_text = ""
+    if addr_container:
+        addr_parts = [clean(t).strip(" ,") for t in addr_container.stripped_strings]
+        addr_text = ", ".join(p for p in addr_parts if p)
 
     match = _YPLOCAL_ADDRESS_RE.match(addr_text) if addr_text else None
     if match:
@@ -200,5 +217,3 @@ def parse_yplocal(url, html):
             business["GBP Link"] = location["hasMap"]
 
     return business
-
-

@@ -21,7 +21,12 @@ def _split_trueen_address(text):
     if not text:
         return result
 
-    zip_match = re.search(r"(\d{5}(?:-\d{4})?)\s*$", text)
+    # Postcode shapes: US 12345 / 12345-6789, AU/NZ 2567 (4 digits), CA K1A 0B1.
+    # Must follow a space or comma so a trailing street number is never eaten.
+    zip_match = re.search(
+        r"(?:(?<=[\s,])|^)(\d{4,5}(?:-\d{4})?|[A-Za-z]\d[A-Za-z]\s?\d[A-Za-z]\d)\s*$",
+        text,
+    )
     if zip_match:
         result["Zipcode"] = zip_match.group(1)
         text = text[:zip_match.start()].strip().rstrip(",").strip()
@@ -48,6 +53,24 @@ def _split_trueen_address(text):
             result["State"] = match.group("state")
 
     return result
+
+
+def _strip_faq_address_lead_in(text):
+    """FAQ answers read "The headquarters of X is located at <address>";
+    keep only the address part."""
+    text = clean(text)
+    text = re.sub(r"^.*?\b(?:is|are)\s+located\s+(?:at|in|on)\s+", "", text, flags=re.I)
+    return text.rstrip(" .")
+
+
+def _strip_faq_owner_lead_in(text):
+    """FAQ answers read "The representative of X is <name>"; keep the name.
+    Greedy prefix so a business name containing "is" cannot cut it short."""
+    text = clean(text)
+    text = re.sub(r"^.*\b(?:is|are)\s+", "", text, flags=re.I) if re.match(
+        r"^(?:the\s+)?(?:owner|ceo|representative)\b", text, flags=re.I
+    ) else text
+    return text.rstrip(" .")
 
 
 def _trueen_faq_answers(soup):
@@ -126,7 +149,7 @@ def parse_trueen(url, html):
     address_text = None
     for question, text in faq.items():
         if "headquarters located" in question:
-            address_text = text
+            address_text = _strip_faq_address_lead_in(text)
             break
 
     if not address_text:
@@ -148,9 +171,11 @@ def parse_trueen(url, html):
 
     # ---- Phone ----
     for question, text in faq.items():
-        if "contact phone number" in question and re.search(r"\d{5,}", text):
-            business["Phone"] = clean(text)
-            break
+        if "contact phone number" in question:
+            phone_match = re.search(r"\+?\d[\d\s().-]{5,}\d", text)
+            if phone_match:
+                business["Phone"] = clean(phone_match.group(0))
+                break
 
     if not business["Phone"] and local_business.get("telephone"):
         business["Phone"] = clean(local_business["telephone"])
@@ -166,7 +191,12 @@ def parse_trueen(url, html):
             business["Phone"] = tel["href"].replace("tel:", "").strip()
 
     # ---- Website URL ----
-    website_link = soup.select_one('a.view-button[target="_blank"][rel="nofollow"]')
+    website_link = None
+    globe_icon = soup.select_one("i.fa-globe")
+    if globe_icon and globe_icon.find_parent("p"):
+        website_link = globe_icon.find_parent("p").select_one('a[href^="http"]')
+    if not website_link:
+        website_link = soup.select_one('a.view-button[target="_blank"][rel="nofollow"]')
     if website_link and website_link.get("href"):
         href = website_link["href"].strip()
         if href and not href.lower().startswith("javascript:"):
@@ -174,9 +204,11 @@ def parse_trueen(url, html):
 
     if not business["Website URL"]:
         for question, text in faq.items():
-            if "official website" in question and text.strip().lower().startswith(("http://", "https://")):
-                business["Website URL"] = clean(text)
-                break
+            if "official website" in question:
+                url_match = re.search(r"https?://[^\s<>\"']+", text)
+                if url_match:
+                    business["Website URL"] = url_match.group(0).rstrip(".,)")
+                    break
 
     # ---- Description ----
     for question, text in faq.items():
@@ -208,7 +240,7 @@ def parse_trueen(url, html):
     #      only the JSON-LD answer ever carries an actual person's name) ----
     for question, text in faq.items():
         if "owner" in question and ("ceo" in question or "representative" in question):
-            owner_name = clean(text)
+            owner_name = _strip_faq_owner_lead_in(text)
             # Some listings' JSON-LD just echoes the business name back as
             # the "answer" (no real owner on file) instead of omitting it
             # or saying so explicitly -- e.g. answer text ==
@@ -252,5 +284,3 @@ def parse_trueen(url, html):
                 business["Social Media Links"][network] = href
 
     return business
-
-

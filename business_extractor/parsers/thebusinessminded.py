@@ -6,6 +6,22 @@ from ..common import *  # noqa: F401,F403 -- see business_extractor/common.py
 
 
 
+def _tbm_jsonld_nodes(soup):
+    """Yield every dict node from the page's JSON-LD blocks (flattening @graph)."""
+    for script in soup.find_all("script", type="application/ld+json"):
+        raw = script.string or script.get_text()
+        if not raw:
+            continue
+        try:
+            data = json.loads(raw, strict=False)
+        except Exception:
+            continue
+        items = data.get("@graph", [data]) if isinstance(data, dict) else data
+        for item in items if isinstance(items, list) else [items]:
+            if isinstance(item, dict):
+                yield item
+
+
 def parse_thebusinessminded(url, html):
 
     soup = BeautifulSoup(html, "lxml")
@@ -68,6 +84,26 @@ def parse_thebusinessminded(url, html):
         if lines and not re.search(r"\d", lines[-1]):
             business["Country"] = lines[-1]
 
+    # ---- Country fallback ----
+    # Some listings render the address as a single line with no country text
+    # after it. The breadcrumb is Home > <Country> > <Category> > <Name>, so
+    # take the second item; failing that, the JSON-LD addressCountry.
+    if not business["Country"]:
+        crumb_names = [
+            clean(li.select_one('[itemprop="name"]').get_text())
+            for li in soup.select('ol.breadcrumb > li[itemprop="itemListElement"]')
+            if li.select_one('[itemprop="name"]')
+        ]
+        if len(crumb_names) >= 3 and crumb_names[1]:
+            business["Country"] = crumb_names[1]
+    if not business["Country"]:
+        for node in _tbm_jsonld_nodes(soup):
+            if node.get("@type") == "LocalBusiness":
+                country = clean(str((node.get("address") or {}).get("addressCountry", "")))
+                if country and country.upper() != "N/A":
+                    business["Country"] = country
+                    break
+
     # ---- Website URL ----
     website_el = soup.select_one(".table-display-website a[href]")
     if website_el and website_el.get("href"):
@@ -88,9 +124,25 @@ def parse_thebusinessminded(url, html):
         i = 0
         while i < len(paragraphs):
             line = paragraphs[i]
-            if re.match(r"^phone:?$", line, flags=re.I) and i + 1 < len(paragraphs):
-                business["Phone"] = paragraphs[i + 1]
-                i += 2
+            # "Phone:" / "Website:" labels come either alone (value in the
+            # next paragraph) or inline ("Phone: (561) 806-7027"). Both are
+            # contact fields, never part of the description.
+            label_match = re.match(r"^(phone|website|web|url):?\s*(.*)$", line, flags=re.I)
+            if label_match:
+                label = label_match.group(1).lower()
+                value = label_match.group(2).strip()
+                consumed = 1
+                if not value and i + 1 < len(paragraphs):
+                    value = paragraphs[i + 1]
+                    consumed = 2
+                if label == "phone":
+                    if not business["Phone"]:
+                        business["Phone"] = value
+                elif not business["Website URL"]:
+                    url_match = re.search(r"https?://[^\s<>\"']+", value) or re.search(r"\bwww\.[^\s<>\"']+", value)
+                    if url_match:
+                        business["Website URL"] = url_match.group(0).rstrip(".,)")
+                i += consumed
                 continue
             if re.match(r"^about us:?$", line, flags=re.I):
                 i += 1
@@ -100,6 +152,21 @@ def parse_thebusinessminded(url, html):
 
         if desc_paragraphs:
             business["Description"] = "\n".join(desc_paragraphs)
+
+    # ---- Website fallback: LocalBusiness.sameAs (skip the directory's own URL) ----
+    if not business["Website URL"]:
+        for node in _tbm_jsonld_nodes(soup):
+            if node.get("@type") != "LocalBusiness":
+                continue
+            same_as = node.get("sameAs") or []
+            if isinstance(same_as, str):
+                same_as = [same_as]
+            for link in same_as:
+                if isinstance(link, str) and link.startswith("http") \
+                        and not _hostname_matches_social_domain(link, "thebusinessminded.com"):
+                    business["Website URL"] = link
+                    break
+            break
 
     # ---- Logo ----
     logo_el = soup.select_one(".profile-image img")
@@ -111,5 +178,3 @@ def parse_thebusinessminded(url, html):
             business["Logo"] = urljoin(url, og_image["content"])
 
     return business
-
-

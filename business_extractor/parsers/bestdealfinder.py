@@ -44,8 +44,22 @@ def parse_bestdealfinder(url, html):
             business["City"] = clean(addr_spans[0].get_text())
             business["State"] = clean(addr_spans[1].get_text())
             business["Zipcode"] = clean(addr_spans[2].get_text())
+        elif len(addr_spans) == 2:
+            # City + region only (no street, no postcode) -- e.g. UK listings
+            # rendering "Chippenham, England<br>United Kingdom".
+            business["City"] = clean(addr_spans[0].get_text())
+            business["State"] = clean(addr_spans[1].get_text())
+        elif len(addr_spans) == 1:
+            business["City"] = clean(addr_spans[0].get_text())
         elif not business["Street"]:
-            addr_text = clean(addr_container.get_text())
+            # No spans at all: use only the text BEFORE the first <br> so the
+            # trailing country line is never glued onto Street.
+            first_line = []
+            for node in addr_container.contents:
+                if getattr(node, "name", None) == "br":
+                    break
+                first_line.append(node.get_text() if hasattr(node, "get_text") else str(node))
+            addr_text = clean("".join(first_line))
             if is_meaningful(addr_text):
                 business["Street"] = addr_text
 
@@ -138,5 +152,3 @@ def parse_bestdealfinder(url, html):
         business["GBP Link"] = directions["href"]
 
     return business
-
-

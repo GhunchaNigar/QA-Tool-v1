@@ -91,6 +91,12 @@ _FINDUSHERE_EXCLUDED_LINK_DOMAINS = (
     "ezoic.net",
 )
 
+# Comma-free "City ST Zip" (e.g. "Plano TX 75023").
+_CITY_STATE_ZIP_NO_COMMA_RE = re.compile(
+    r"^(?P<city>.+?)\s+(?P<state>[A-Za-z]{2})\s+(?P<zip>\d{5}(?:-\d{4})?)$"
+)
+
+
 def _split_address_allow_no_comma(address):
     """Like _split_blinx_address, but first checks for the no-street,
     no-comma "City State Zip" shape before falling back to the
@@ -432,8 +438,22 @@ def fetch_via_playwright(url, worker_path="playwright_worker.py", timeout_ms=450
         raise RuntimeError(
             f"playwright_worker.py produced no output. stderr: {proc.stderr}"
         )
-    last_line = [line for line in stdout.splitlines() if line.strip()][-1]
-    data = json.loads(last_line)
+    # Split on "\n" only -- str.splitlines() also breaks on U+2028/U+2029/
+    # U+0085, which can appear inside the scraped HTML and would cut the
+    # JSON result line into fragments. Walk back from the end so any stray
+    # non-JSON output printed after the result can't hide it either.
+    data = None
+    for line in reversed([l for l in stdout.split("\n") if l.strip()]):
+        try:
+            data = json.loads(line)
+            break
+        except ValueError:
+            continue
+    if data is None:
+        raise RuntimeError(
+            "playwright_worker.py output was not valid JSON. "
+            f"Last 300 chars: {stdout[-300:]!r} | stderr: {proc.stderr[-500:]!r}"
+        )
 
     if not data.get("success"):
         raise RuntimeError(f"Playwright fetch failed: {data.get('debug')}")
@@ -480,3 +500,192 @@ def filter_business_fields(business, url):
             filtered[field_name] = _empty_value_for(field_name)
 
     return filtered
+
+def _extract_pe_cover(soup, url):
+    """Cover (header) image on ProvenExpert / ProvenEmployer profiles.
+
+    Rendered as a CSS background on .profileHeader, declared inside
+    <div id="customHeaderStyle"><style>...</style></div> with a desktop
+    (header_full_*) and mobile (header_mobile_*) variant. The block only
+    exists when the business uploaded its own cover. Falls back to the
+    matching <link rel="preload" as="image"> tags. Returns the desktop
+    URL, or "".
+    """
+    urls = []
+    header_style = soup.select_one("#customHeaderStyle")
+    if header_style:
+        urls = re.findall(
+            r"background-image\s*:\s*url\(([^)]+)\)",
+            header_style.get_text(" "),
+            re.I,
+        )
+    if not urls:
+        for link in soup.find_all("link", href=True):
+            rel = link.get("rel") or []
+            if "preload" in rel and link.get("as") == "image" and "/header_" in link["href"]:
+                urls.append(link["href"])
+    urls = [u.strip().strip("'\"") for u in urls if u.strip()]
+    if not urls:
+        return ""
+    desktop = [u for u in urls if "header_mobile" not in u]
+    return urljoin(url, (desktop or urls)[0])
+
+
+# ---- ProvenExpert / ProvenEmployer opening hours ----------------------
+# Hours live in <div id="profilesOpening">, which the server sends EMPTY;
+# the site's own JS (Profile.setProfileOpeningHours('<id>')) fills it in
+# after load. A plain requests fetch therefore never sees them -- the page
+# has to be rendered (see pe_hours_need_render + dispatch.py).
+
+_PE_DAY_RE = re.compile(
+    r"^(monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
+    r"mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)\b\.?:?\s*(.*)$",
+    re.I,
+)
+_PE_HOURS_NOISE = {"display all times", "show less", "today", "opening hours"}
+
+
+def pe_hours_need_render(html):
+    """True when the page has the hours widget but it hasn't been filled
+    in yet (i.e. we're looking at the raw server HTML)."""
+    soup = BeautifulSoup(html, "lxml")
+    box = soup.select_one("#profilesOpening")
+    return box is not None and not clean(box.get_text(" "))
+
+
+_PE_TIME_RE = re.compile(r"\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s*[-\u2013]\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)?|closed|open 24", re.I)
+
+
+def _pe_hours_from_container(box):
+    parts = [clean(t) for t in box.stripped_strings]
+    parts = [
+        p for p in parts
+        if p and p.lower().rstrip(":") not in _PE_HOURS_NOISE
+        and not p.lower().startswith("appointments by")
+    ]
+    if not parts:
+        return ""
+
+    rows, current = [], None
+    for part in parts:
+        m = _PE_DAY_RE.match(part)
+        if m:
+            if current:
+                rows.append(current)
+            current = [m.group(1).capitalize(), [m.group(2)] if m.group(2) else []]
+        elif current:
+            current[1].append(part)
+    if current:
+        rows.append(current)
+
+    out, seen_days = [], set()
+    for day, values in rows:
+        key = day.lower()[:3]
+        if key in seen_days:  # widget may repeat today's row at the top
+            continue
+        seen_days.add(key)
+        value = ", ".join(clean(v) for v in values if clean(v))
+        out.append(f"{day}: {value}" if value else day)
+
+    hours = " | ".join(out)
+    # Only accept it if at least one real time/"Closed" value is present,
+    # so a heading or stray link text can't pass as hours.
+    return hours if _PE_TIME_RE.search(hours) else ""
+
+
+def _pe_is_hidden(el):
+    return "hidden" in (el.get("class") or [])
+
+
+def _pe_hours_from_rows(box):
+    """Structured read of the rendered widget (confirmed markup):
+
+        <div id="openingDayRow1">
+          <span id="weekday1openingDay">Monday</span>
+          <span id="weekday1openingClosed" class="... hidden">CLOSED</span>
+          <span id="weekday1openingTime">11:30 AM - 6:30 PM</span>
+        </div>
+
+    Every row carries BOTH a "CLOSED" span and a time span; the site adds
+    class="hidden" to whichever one doesn't apply. Only the visible one is
+    the real value. (Rows themselves may be hidden until "Display all
+    times" is clicked -- they are still real days, so they're kept.)
+    """
+    out = []
+    for row in box.select("[id^='openingDayRow']"):
+        day_el = row.select_one("[id$='openingDay']")
+        if not day_el:
+            continue
+        day = clean(day_el.get_text())
+        closed_el = row.select_one("[id$='openingClosed']")
+        time_els = row.select("[id$='openingTime']")
+
+        visible_times = [
+            clean(t.get_text(" ")) for t in time_els
+            if not _pe_is_hidden(t) and clean(t.get_text(" "))
+        ]
+        if visible_times:
+            value = ", ".join(visible_times)
+        elif closed_el is not None and not _pe_is_hidden(closed_el):
+            value = "Closed"
+        else:
+            value = ""
+        out.append(f"{day}: {value}" if value else day)
+    return " | ".join(out)
+
+
+def _extract_pe_hours(soup):
+    """Opening hours from a RENDERED ProvenExpert/ProvenEmployer page.
+
+    1. Structured read of the #profilesOpening day rows (exact markup).
+    2. Generic weekday/time text scan of the box, with hidden value spans
+       removed, in case the widget markup changes.
+    3. Same scan over the whole "Opening hours" section.
+    """
+    box = soup.select_one("#profilesOpening")
+    if box:
+        hours = _pe_hours_from_rows(box)
+        if hours and _PE_TIME_RE.search(hours):
+            return hours
+
+        box_copy = BeautifulSoup(str(box), "lxml")
+        for el in box_copy.find_all(True):
+            # Drop hidden value spans, but never whole day rows.
+            if _pe_is_hidden(el) and not (el.get("id") or "").startswith("openingDayRow"):
+                el.decompose()
+        hours = _pe_hours_from_container(box_copy)
+        if hours:
+            return hours
+
+    for heading in soup.find_all(["h3", "h4", "strong"]):
+        if clean(heading.get_text()).lower() == "opening hours":
+            section = heading.find_parent(class_="mb20") or heading.find_parent("div")
+            if section:
+                hours = _pe_hours_from_container(section)
+                if hours:
+                    return hours
+    return ""
+
+
+def _extract_pe_gallery(soup, url):
+    """Gallery images on ProvenExpert / ProvenEmployer. Thumbnails are
+    rendered as <div class="pictureThumb" style="background-image:url(...)">
+    rather than <img>, so both forms are read."""
+    photos = []
+    container = soup.select_one("#slideshowContainer")
+    if not container:
+        return photos
+    for el in container.select("[style*='background-image']"):
+        for u in re.findall(r"background-image\s*:\s*url\(([^)]+)\)", el.get("style", ""), re.I):
+            u = u.strip().strip("'\"")
+            if u and not u.startswith("data:"):
+                u = urljoin(url, u)
+                if u not in photos:
+                    photos.append(u)
+    for img in container.select("img"):
+        u = img.get("data-src") or img.get("src")
+        if u and not u.startswith("data:"):
+            u = urljoin(url, u)
+            if u not in photos:
+                photos.append(u)
+    return photos

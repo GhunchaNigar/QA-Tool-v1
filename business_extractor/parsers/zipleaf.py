@@ -129,11 +129,51 @@ def parse_zipleaf(url, html):
         business["GBP Link"] = gbp_link["href"]
 
     # ---- Hours ----
-    hours_tag = soup.select_one('[itemprop="openingHours"]') or soup.select_one(".listing-hours, .business-hours")
-    if hours_tag:
-        hours_text = clean(hours_tag.get_text(separator=" "))
-        if is_meaningful(hours_text):
-            business["Hours"] = hours_text
+    # Rendered server-side as:
+    #   <div class="zl-hours">
+    #     <div class="zl-hours-row [is-today]">
+    #       <div class="zl-hours-day">Saturday <span class="zl-hours-today">Today</span></div>
+    #       <div class="zl-hours-when">
+    #         <span class="zl-hours-time"><time>11:30</time><span class="zl-hours-sep">–</span><time>18:30</time></span>
+    #         <span class="zl-hours-note"></span>
+    #       </div>
+    #     </div> ...
+    hours_rows = []
+    for row in soup.select(".zl-hours .zl-hours-row"):
+        day_el = row.select_one(".zl-hours-day")
+        if not day_el:
+            continue
+        day_el = BeautifulSoup(str(day_el), "lxml")
+        for badge in day_el.select(".zl-hours-today"):
+            badge.decompose()  # drop the "Today" marker
+        day = clean(day_el.get_text(" "))
+
+        when = row.select_one(".zl-hours-when")
+        value = ""
+        if when:
+            times = [clean(t.get_text()) for t in when.select("time") if clean(t.get_text())]
+            if len(times) >= 2:
+                # pair up open/close times (handles split shifts too)
+                value = ", ".join(
+                    f"{times[i]} - {times[i + 1]}" for i in range(0, len(times) - 1, 2)
+                )
+            else:
+                value = clean(when.get_text(" "))  # e.g. "Closed" / "Open 24 hours"
+            note_el = when.select_one(".zl-hours-note")
+            note = clean(note_el.get_text()) if note_el else ""
+            if note and note not in value:
+                value = f"{value} ({note})" if value else note
+        if day:
+            hours_rows.append(f"{day}: {value}" if value else day)
+    if hours_rows:
+        business["Hours"] = " | ".join(hours_rows)
+
+    if not business["Hours"]:
+        hours_tag = soup.select_one('[itemprop="openingHours"]') or soup.select_one(".listing-hours, .business-hours")
+        if hours_tag:
+            hours_text = clean(hours_tag.get_text(separator=" "))
+            if is_meaningful(hours_text):
+                business["Hours"] = hours_text
 
     # ---- Social Media Links ----
     for a in soup.find_all("a", href=True):
@@ -145,4 +185,3 @@ def parse_zipleaf(url, html):
                 business["Social Media Links"][network] = href
 
     return business
-

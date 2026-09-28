@@ -45,6 +45,14 @@ def parse_chamberofcommerce(url, html):
             if obj.get("image"):
                 business["Logo"] = urljoin(url, obj["image"])
 
+            if obj.get("telephone"):
+                business["Phone"] = clean(obj["telephone"])
+
+            # "url" is the business's own website (not the listing page).
+            ld_url = clean(obj.get("url", ""))
+            if ld_url.startswith("http") and "chamberofcommerce.com" not in ld_url.lower():
+                business["Website URL"] = ld_url
+
             addr = obj.get("address", {})
             if isinstance(addr, dict):
                 business["Street"] = clean(addr.get("streetAddress", ""))
@@ -114,23 +122,55 @@ def parse_chamberofcommerce(url, html):
                 business["Description"] = desc_text
 
     # ---- Phone ----
-    phone_icon = soup.select_one("i.fa-phone")
-    if phone_icon and phone_icon.parent:
-        phone_text = clean(phone_icon.parent.get_text())
-        if phone_text:
-            business["Phone"] = phone_text
+    # The visible number is tagged selector-type="Phone". The CALL button
+    # carries the same attribute but only says "CALL", so take the first
+    # one whose text actually contains digits.
+    phone_text = ""
+    for phone_tag in soup.select('a[selector-type="Phone"]'):
+        candidate = clean(phone_tag.get_text())
+        if len(re.sub(r"\D", "", candidate)) >= 7:
+            phone_text = candidate
+            break
+    if not phone_text:
+        tel = soup.select_one('a[href^="tel:"]')
+        if tel:
+            phone_text = tel["href"][4:].strip()
+    if phone_text:
+        business["Phone"] = phone_text
 
     # ---- Website URL ----
     site_span = soup.select_one('span[selector-type="Website"] a[href]')
-    if site_span:
+    if site_span and site_span.get("href", "").startswith("http"):
         business["Website URL"] = site_span["href"]
 
-    # ---- Keywords ----
-    meta_kw = soup.find("meta", attrs={"name": "keywords"})
-    if meta_kw:
-        kw_text = clean(meta_kw.get("content", ""))
-        if is_meaningful(kw_text):
-            business["Keywords"] = kw_text
+    # Fallback: FAQ answer "The website (URL) for X is: https://..."
+    if not business["Website URL"]:
+        m = re.search(r"website \(URL\) for .+? is:\s*(https?://\S+)", soup.get_text(" "), re.I)
+        if m:
+            business["Website URL"] = m.group(1).rstrip(".,")
+
+    # ---- Keywords (Products / Services cards) ----
+    # The meta keywords tag is auto-generated SEO text ("NAME New York NY,
+    # NAME 10018, NAME (213) ...") -- not the business's keywords -- so it
+    # is only used when the page has no Products/Services lists.
+    keywords = []
+    for heading in soup.select(".card-body h3.card-title"):
+        title = clean(heading.get_text()).lower()
+        if "products" not in title and "services" not in title:
+            continue
+        card = heading.find_parent("div", class_="card-body")
+        for li in card.select("ul li") if card else []:
+            item = clean(li.get_text())
+            if item and item.lower() not in {k.lower() for k in keywords}:
+                keywords.append(item)
+    if keywords:
+        business["Keywords"] = ", ".join(keywords)
+    else:
+        meta_kw = soup.find("meta", attrs={"name": "keywords"})
+        if meta_kw:
+            kw_text = clean(meta_kw.get("content", ""))
+            if is_meaningful(kw_text):
+                business["Keywords"] = kw_text
 
     # ---- Hours----
     hours_container = soup.select_one(".HoursofOperation .row.mb-0.text-dark")
@@ -218,5 +258,3 @@ def parse_chamberofcommerce(url, html):
             business["Social Media Links"][network] = link["href"]
 
     return business
-
-

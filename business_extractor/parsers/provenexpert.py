@@ -3,6 +3,7 @@ Site parser: provenexpert.com
 """
 
 from ..common import *  # noqa: F401,F403 -- see business_extractor/common.py
+from ..common import _extract_pe_cover, _extract_pe_gallery, _extract_pe_hours, pe_hours_need_render
 
 
 def parse_provenexpert(url, html):
@@ -67,10 +68,23 @@ def parse_provenexpert(url, html):
     if tags:
         business["Keywords"] = ", ".join(tags)
 
+    # Fallback: many profiles list their services only in the tagline under
+    # the name (h2.profileJob), e.g. "HVAC contractor, HVAC repair, AC
+    # installation." or "luxury alterations | tailor | alterations".
+    if not business["Keywords"] and job:
+        parts = re.split(r"\s*[,|;]\s*", clean(job.get_text()))
+        keywords = []
+        for part in parts:
+            part = part.strip(" .")
+            if part and part.lower() not in {k.lower() for k in keywords}:
+                keywords.append(part)
+        if keywords:
+            business["Keywords"] = ", ".join(keywords)
+
     # ---- Description (About text, incl. the CSS-hidden continuation) ----
     welcome = soup.select_one("#welcomeTextPublic")
     if welcome:
-        for junk in welcome.select(".textEtc, .collapseAboutme, #offerTags"):
+        for junk in welcome.select(".textEtc, .collapseAboutme, .foldAboutme, #offerTags"):
             junk.decompose()
         text = clean(welcome.get_text(separator=" "))
         if is_meaningful(text):
@@ -123,9 +137,18 @@ def parse_provenexpert(url, html):
             business["Business Email"] = email["href"].replace("mailto:", "").split("?")[0].strip()
 
     # ---- Website URL ("Websites" box) ----
-    website_link = soup.select_one("#profilesPublic a[href^='http']")
-    if website_link:
-        business["Website URL"] = website_link["href"]
+    # The box can also hold a "GMB Listing" (Google Maps) link and, in a
+    # second #profilesPublic block, social profiles -- and either can come
+    # first. Take the first link that is neither of those.
+    for a in soup.select("#profilesPublic a[href^='http']"):
+        href = a["href"].strip()
+        low = href.lower()
+        if _is_maps_link(href):
+            continue
+        if any(domain in low for domain in SOCIAL_DOMAINS):
+            continue
+        business["Website URL"] = href
+        break
 
     # ---- Social Media Links / GBP Link (anchors across the profile links box) ----
     for a in soup.select("#profilesPublic a[href^='http'], #personalPublic a[href^='http']"):
@@ -138,25 +161,39 @@ def parse_provenexpert(url, html):
             if domain in href.lower():
                 business["Social Media Links"][network] = href
 
-    # ---- Hours ----
-    hours_tag = soup.select_one('[itemprop="openingHours"]') or soup.select_one(".openingHours")
-    if hours_tag:
-        hours_text = clean(hours_tag.get_text(separator=" "))
-        if is_meaningful(hours_text):
-            business["Hours"] = hours_text
+    # ---- Hours (JS-rendered into #profilesOpening; see needs_render) ----
+    hours = _extract_pe_hours(soup)
+    if not hours:
+        hours_tag = soup.select_one('[itemprop="openingHours"]') or soup.select_one(".openingHours")
+        if hours_tag:
+            hours = clean(hours_tag.get_text(separator=" "))
+    if is_meaningful(hours):
+        business["Hours"] = hours
 
-    # ---- Photos (profile gallery, if present) ----
-    gallery_imgs = soup.select(".peGallery img, .profileGallery img")
+    # ---- Photos (cover image + profile gallery) ----
     photos = []
-    for img in gallery_imgs:
-        src = img.get("src")
-        if src:
-            src = urljoin(url, src)
-            if src not in photos:
-                photos.append(src)
+
+    def _add_photo(src):
+        if not src or src.startswith("data:"):
+            return
+        src = urljoin(url, src.strip().strip("'\""))
+        if src not in photos:
+            photos.append(src)
+
+    # Cover image (CSS background in #customHeaderStyle) -- shared
+    # helper with provenemployer.com, see common._extract_pe_cover.
+    _add_photo(_extract_pe_cover(soup, url))
+
+    # Gallery (background-image thumbnails and/or <img> tags).
+    for src in _extract_pe_gallery(soup, url):
+        _add_photo(src)
+
     if photos:
         business["Photos"] = photos
 
     return business
 
 
+# Hours are filled in by JavaScript after page load, so ask dispatch to
+# re-fetch with Playwright when the static HTML has an empty hours box.
+parse_provenexpert.needs_render = pe_hours_need_render
