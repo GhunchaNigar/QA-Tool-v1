@@ -19,6 +19,22 @@ def _globeconnected_jsonld(soup):
     return {}
 
 
+# Images this site serves when a company has NOT uploaded its own logo:
+# JSON-LD "image" falls back to a shared category icon (e.g.
+# /images/cat-jc-logo.png) and og:image to /images/og/default.png. Neither is
+# the business's logo, so treating them as one reports "PRESENT" falsely.
+_PLACEHOLDER_LOGO_RE = re.compile(
+    r"(^|/)(cat-[\w-]*|default[\w-]*|placeholder[\w-]*|no[-_]?(image|logo)[\w-]*)\.(png|jpe?g|gif|webp|svg)$"
+    r"|/images/og/",
+    re.I,
+)
+
+
+def _is_placeholder_logo(src):
+    path = urlparse(src or "").path
+    return bool(_PLACEHOLDER_LOGO_RE.search(path))
+
+
 def parse_globeconnected(url, html):
 
     soup = BeautifulSoup(html, "lxml")
@@ -52,10 +68,15 @@ def parse_globeconnected(url, html):
         business["State"] = state
         business["Zipcode"] = zipcode
 
-    # ---- Country (JSON-LD only; not rendered anywhere on the page) ----
-    addr_obj = jsonld.get("address")
-    if isinstance(addr_obj, dict) and addr_obj.get("addressCountry"):
-        business["Country"] = clean(addr_obj["addressCountry"])
+    # ---- Country (rendered as <p class="country">; JSON-LD has no
+    #      addressCountry on this template, so it is only a fallback) ----
+    country_tag = soup.select_one("p.country")
+    if country_tag:
+        business["Country"] = clean(country_tag.get_text())
+    if not business["Country"]:
+        addr_obj = jsonld.get("address")
+        if isinstance(addr_obj, dict) and addr_obj.get("addressCountry"):
+            business["Country"] = clean(addr_obj["addressCountry"])
 
     # ---- Phone ----
     tel = soup.select_one("p.phone a[href^='tel:']")
@@ -109,17 +130,12 @@ def parse_globeconnected(url, html):
     if cat_links:
         business["Category"] = ", ".join(cat_links)
 
-    # ---- Logo (JSON-LD "image" is the business's own logo; og:image on
-    #      this template is the directory site's own logo, so it's only
-    #      used as a last-resort fallback) ----
-    if jsonld.get("image"):
-        business["Logo"] = urljoin(url, jsonld["image"])
-
-    if not business["Logo"]:
-        og_image = soup.find("meta", property="og:image")
-        if og_image and og_image.get("content"):
-            business["Logo"] = urljoin(url, og_image["content"])
+    # ---- Logo: only the business's own uploaded logo counts. The JSON-LD
+    #      "image" is used when it is not a shared placeholder; og:image on
+    #      this template is always the directory's own default image, so it
+    #      is NOT used as a fallback. ----
+    jl_image = jsonld.get("image")
+    if isinstance(jl_image, str) and jl_image and not _is_placeholder_logo(jl_image):
+        business["Logo"] = urljoin(url, jl_image)
 
     return business
-
-
