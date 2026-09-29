@@ -304,6 +304,9 @@ BLOCK_SIGNALS = [
     "enable cookies to continue", "please enable cookies",
     "security check", "access to this page has been denied",
     "verify you're human",
+    "verifying you are human", "just a moment", "security verification",
+    "review the security of your connection", "challenges.cloudflare.com",
+    "_cf_chl_opt", "cf-turnstile", "performing security",
 ]
 
 
@@ -359,7 +362,15 @@ def empty_business():
 
 def _looks_blocked(html_text):
     combined = html_text[:4000].lower()
-    return any(s in combined for s in BLOCK_SIGNALS)
+    if any(s in combined for s in BLOCK_SIGNALS):
+        return True
+    # Cloudflare challenge pages can push their markers past 4000 chars
+    # (inline CSS/JS). A challenge page has no real content, so only flag
+    # a late marker when the page is small.
+    if len(html_text) < 60000:
+        tail = html_text.lower()
+        return any(m in tail for m in ("challenges.cloudflare.com", "_cf_chl_opt", "cf-turnstile"))
+    return False
 
 CLOUDFLARE_ERROR_SIGNALS = [
     "error 521", "error 522", "error 523", "error 524", "error 525", "error 526",
