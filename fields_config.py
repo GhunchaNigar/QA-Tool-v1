@@ -207,7 +207,7 @@ SOURCE_FIELDS = {
     ],
     "globeconnected.com": [
         "Name", "Street", "City", "State", "Zipcode", "Country",
-        "Website URL", "Description", "Category", "Logo",
+        "Website URL", "Description", "Category",
     ],
     "whatsyourhours.com": [
         "Name", "Street", "City", "State", "Zipcode", "Country",
