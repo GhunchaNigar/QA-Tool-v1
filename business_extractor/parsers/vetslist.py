@@ -38,44 +38,74 @@ def parse_vetslist(url, html):
     # "300 Triple Diamond Blvd ,Nokomis, FL 34275") with nothing else in the
     # block, so neither the addressLocality nor postalCode selector matched
     # and every address field was silently left blank. Handle both shapes.
-    addr_li = soup.select_one('[itemprop="address"][itemtype*="PostalAddress"]')
+    addr_li = soup.select_one('[itemprop="address"][itemtype*="PostalAddress"]') \
+        or soup.select_one('[itemprop="address"]')
     if addr_li:
-        locality_span = addr_li.select_one('span[itemprop="addressLocality"]')
-        if locality_span:
-            locality_text = clean(locality_span.get_text())
-            match = re.match(r"^(?P<city>[A-Za-z][A-Za-z .'-]*?)\s+(?P<state>[A-Z]{2})$", locality_text)
-            if match:
-                business["City"] = match.group("city")
-                business["State"] = match.group("state")
-            elif is_meaningful(locality_text):
-                business["City"] = locality_text
+        def _span(prop):
+            el = addr_li.select_one('[itemprop="%s"]' % prop)
+            txt = clean(el.get_text()) if el else ""
+            return txt if is_meaningful(txt) else ""
 
-        postal_span = addr_li.select_one('span[itemprop="postalCode"]')
-        if postal_span:
-            postal_text = clean(postal_span.get_text())
-            if is_meaningful(postal_text):
+        street_text = _span("streetAddress")
+        locality_text = _span("addressLocality")
+        region_text = _span("addressRegion")
+        postal_text = _span("postalCode")
+
+        if street_text and not (locality_text or region_text or postal_text):
+            # Whole address crammed into one streetAddress span.
+            street, city, state, zipcode = _split_address_allow_no_comma(street_text)
+            business["Street"] = street
+            business["City"] = city
+            business["State"] = state
+            business["Zipcode"] = zipcode
+        else:
+            # Street is read independently of the locality/postal spans.
+            if street_text:
+                business["Street"] = street_text
+            if locality_text:
+                m = re.match(
+                    r"^(?P<city>[A-Za-z][A-Za-z .'-]*?)[,\s]+(?P<state>[A-Z]{2})$",
+                    locality_text,
+                )
+                if m:
+                    business["City"] = m.group("city").strip()
+                    business["State"] = m.group("state")
+                else:
+                    business["City"] = locality_text
+            if region_text and not business["State"]:
+                business["State"] = region_text
+            if postal_text:
                 business["Zipcode"] = postal_text
 
-        if not locality_span and not postal_span:
-            street_span = addr_li.select_one('span[itemprop="streetAddress"]')
-            if street_span:
-                addr_text = clean(street_span.get_text())
-                if is_meaningful(addr_text):
-                    street, city, state, zipcode = _split_blinx_address(addr_text)
-                    if is_meaningful(street):
-                        business["Street"] = street
-                    if is_meaningful(city):
-                        business["City"] = city
-                    if is_meaningful(state):
-                        business["State"] = state
-                    if is_meaningful(zipcode):
-                        business["Zipcode"] = zipcode
+        # Country is plain text (not a tag) after the last <br>.
+        for br in reversed(addr_li.find_all("br")):
+            sib = br.next_sibling
+            if isinstance(sib, NavigableString):
+                country_text = clean(str(sib))
+                if is_meaningful(country_text):
+                    business["Country"] = country_text
+                    break
 
-        br = addr_li.find("br")
-        if br and br.next_sibling:
-            country_text = clean(str(br.next_sibling))
-            if is_meaningful(country_text):
-                business["Country"] = country_text
+    # ---- JSON-LD fallback for anything the itemprop markup didn't give us ----
+    if not (business["Street"] and business["State"]):
+        for tag in soup.select('script[type="application/ld+json"]'):
+            try:
+                data = json.loads(tag.string or "")
+            except (ValueError, TypeError):
+                continue
+            nodes = data.get("@graph", [data]) if isinstance(data, dict) else data
+            for node in nodes if isinstance(nodes, list) else []:
+                addr = node.get("address") if isinstance(node, dict) else None
+                if isinstance(addr, dict):
+                    for key, field in (
+                        ("streetAddress", "Street"),
+                        ("addressLocality", "City"),
+                        ("addressRegion", "State"),
+                        ("postalCode", "Zipcode"),
+                    ):
+                        val = clean(str(addr.get(key, "")))
+                        if is_meaningful(val) and not business[field]:
+                            business[field] = val
 
     # ---- Category (breadcrumb crumb right before the current-page
     # business name; "Home"/root crumbs are excluded) ----
