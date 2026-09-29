@@ -67,6 +67,16 @@ def parse_chamberofcommerce(url, html):
         if h1:
             business["Business Name"] = clean(h1.get_text())
 
+    # A bot-wall/challenge page shows the site's own hostname as its <h1>.
+    # That is not a business name -- bail out instead of returning a
+    # near-empty record that looks like a successful extraction.
+    host = urlparse(url).netloc.lower()
+    if business["Business Name"].lower() in (host, host.removeprefix("www.")):
+        raise RuntimeError(
+            f"{url}: page served a bot-check/challenge (no business data), "
+            f"not the listing."
+        )
+
     # ---- Address fallback----
     if not business["Street"]:
         addr1 = soup.select_one('span[selector-type="Address1"]')
