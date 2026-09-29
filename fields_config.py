@@ -236,7 +236,7 @@ SOURCE_FIELDS = {
     ],
     "bestdealfinder.com": [
         "Name", "Street", "City", "State", "Zipcode", "Country",
-        "Phone", "Website URL", "Description",
+        "Phone", "Website URL", "Description", "Business Email",
         "GBP Link", "Category", "Logo",
     ],
     
