@@ -135,7 +135,13 @@ def parse_merchantcircle(url, html):
         href = a["href"]
         if not href.startswith("http"):
             continue
-        if "merchantcircle.com" in href.lower():
+        # Skip MerchantCircle's own links, including its site-wide footer
+        # social profiles (facebook.com/MerchantCirclecom,
+        # twitter.com/MerchantCircle, linkedin.com/company/merchantcircle),
+        # whose handles don't contain "merchantcircle.com".
+        if "merchantcircle" in href.lower():
+            continue
+        if "footer-social-link" in a.get("class", []):
             continue
         if _is_maps_link(href):
             if not business["GBP Link"]:
@@ -146,5 +152,3 @@ def parse_merchantcircle(url, html):
                 business["Social Media Links"][network] = href
 
     return business
-
-

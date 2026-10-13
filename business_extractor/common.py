@@ -405,9 +405,21 @@ def _split_street_and_city(street):
     return street, ""
 
 
+_SHORT_MAPS_LINK_RE = re.compile(
+    r"(?:^|//)(?:www\.)?(?:g\.page|maps\.app\.goo\.gl|share\.google|business\.google\.com)(?:/|$)"
+    r"|goo\.gl/maps"
+)
+
+
 def _is_maps_link(href):
+    """Google Maps / Business Profile link. Covers the long form
+    (google.com/maps/..., maps.google.com/...) and Google's short forms
+    (g.page/..., maps.app.goo.gl/..., goo.gl/maps/..., share.google/...),
+    which don't contain both "google" and "map"."""
     href = href.lower()
-    return "google" in href and "map" in href
+    if "google" in href and "map" in href:
+        return True
+    return bool(_SHORT_MAPS_LINK_RE.search(href))
 
 
 
