@@ -151,4 +151,26 @@ def parse_merchantcircle(url, html):
             if domain in href.lower():
                 business["Social Media Links"][network] = href
 
+    # ---- GBP Link fallback ----
+    # The "Open in Maps" button lives inside Google's cross-origin map
+    # iframe, so it is never in the fetched HTML. The page does expose the
+    # address and coordinates in an inline ListMap({...}) script, so build
+    # the same google.com/maps/place/<address>/@lat,lng link from those.
+    if not business["GBP Link"]:
+        from urllib.parse import quote_plus as _qp
+        for script in soup.find_all("script"):
+            text = script.string or script.get_text() or ""
+            if "map_url" not in text:
+                continue
+            m_addr = re.search(r'"company_addr"\s*:\s*"([^"]+)"', text)
+            m_lat = re.search(r'"latitude"\s*:\s*(-?\d+(?:\.\d+)?)', text)
+            m_lng = re.search(r'"longitude"\s*:\s*(-?\d+(?:\.\d+)?)', text)
+            m_full = re.search(r'"has_full_address"\s*:\s*true', text)
+            if m_addr and m_lat and m_lng and m_full:
+                business["GBP Link"] = (
+                    "https://www.google.com/maps/place/%s/@%s,%s,1063m/data=!3m1!1e3?hl=en-US"
+                    % (_qp(m_addr.group(1)), m_lat.group(1), m_lng.group(1))
+                )
+                break
+
     return business
