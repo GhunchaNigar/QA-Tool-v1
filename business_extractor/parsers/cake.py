@@ -1,17 +1,18 @@
 from ..common import *
 
 
-# Order doesn't matter for correctness (positions get sorted), but this
-# mirrors the order fields appear on the page. Each label's value is
-# "whatever text comes before the next label".
+# Labels in the order they appear on the page. The colon is OPTIONAL:
+# the guest template prints "Address:" while the fuller template prints a
+# bare "Address" on its own line. Each label's value is "whatever text
+# comes before the next label".
 _LABELS = [
-    ("Owner Name:", "owner_name"),
-    ("Address:", "address"),
-    ("Phone:", "phone"),
-    ("Website:", "website"),
+    ("Owner Name", "owner_name"),
+    ("Address", "address"),
+    ("Phone", "phone"),
+    ("Website", "website"),
     ("Business Email", "email_text"),
-    ("About Us:", "about"),
-    ("Related Searches:", "keywords"),
+    ("About Us", "about"),
+    ("Related Searches", "keywords"),
 ]
 
 
@@ -52,23 +53,47 @@ def _find_info_container(soup):
 
 def _extract_labeled_segments(container):
     """Split the container's text by the known labels, returning
-    {field_key: raw text between this label and the next}."""
+    {field_key: raw text between this label and the next}.
+
+    A label only counts at the START of a line (so the word "Address" or
+    "Phone" inside the description is ignored), with an optional trailing
+    colon. Labels are searched in page order, each one after the previous."""
     text = container.get_text("\n")
 
     positions = []
+    cursor = 0
     for label, key in _LABELS:
-        idx = text.find(label)
-        if idx != -1:
-            positions.append((idx, label, key))
-    positions.sort()
+        m = re.compile(r"(?im)^[ \t]*" + re.escape(label) + r"[ \t]*:?").search(text, cursor)
+        if m:
+            positions.append((m.start(), m.end(), key))
+            cursor = m.end()
 
     segments = {}
-    for i, (idx, label, key) in enumerate(positions):
-        start = idx + len(label)
+    for i, (start, label_end, key) in enumerate(positions):
         end = positions[i + 1][0] if i + 1 < len(positions) else len(text)
-        segments[key] = text[start:end]
+        segments[key] = text[label_end:end]
 
     return segments
+
+
+_STREET_TYPES = (
+    "street|st|road|rd|avenue|ave|av|drive|dr|crescent|cres|court|ct|lane|ln|"
+    "place|pl|parade|pde|highway|hwy|boulevard|blvd|terrace|tce|way|close|cl|"
+    "circuit|cct|grove|gr|square|sq|walk|esplanade|esp|loop|trail|row|path|"
+    "mews|rise|ridge|view|green|gardens|gdns|broadway"
+)
+
+
+def _split_street_and_city(street):
+    """Cake prints "12 hilltop crescent Burwood East" with no comma between
+    street and suburb, so _split_blinx_address leaves it all in Street.
+    Split after the LAST street-type word that still has words after it."""
+    words = street.split()
+    pattern = re.compile(r"^(?:%s)\.?$" % _STREET_TYPES, re.I)
+    for i in range(len(words) - 2, 0, -1):
+        if pattern.match(words[i]):
+            return " ".join(words[: i + 1]), " ".join(words[i + 1 :])
+    return street, ""
 
 
 def parse_cake(url, html):
@@ -100,6 +125,8 @@ def parse_cake(url, html):
     address = clean(segments.get("address", ""))
     if is_meaningful(address):
         street, city, state, zipcode = _split_blinx_address(address)
+        if street and not city:
+            street, city = _split_street_and_city(street)
         business["Street"] = street
         business["City"] = city
         business["State"] = state

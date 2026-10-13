@@ -159,6 +159,30 @@ def parse_zumvu(url, html):
         if og_image and og_image.get("content"):
             business["Logo"] = urljoin(url, og_image["content"])
 
+    # ---- Country (location-pin line under the business name, e.g. "AUS").
+    # JSON-LD often leaves addressCountry empty and the Location block only
+    # shows "City, State Zip," -- the header is the one place the country
+    # is always printed. ----
+    if not business["Country"]:
+        for li in soup.select("ul.profileaddrss li"):
+            icon = li.find("i")
+            icon_classes = " ".join(icon.get("class", [])) if icon else ""
+            if "fa-folder" not in icon_classes:  # folder line is the Category
+                country_text = clean(li.get_text())
+                if country_text and not re.search(r"\d", country_text) and len(country_text) <= 40:
+                    business["Country"] = country_text
+                    break
+
+    # ---- Country fallback: trailing segment of the Location block, if present
+    # (e.g. "Dover, Delaware 19901, UNITED STATES"). ----
+    if not business["Country"]:
+        loc_li = soup.select_one(".locflexfirstcol ul.abtcontact-page li")
+        if loc_li:
+            addr_text = clean_multiline(loc_li.get_text(separator="\n"))
+            parts = [x.strip() for x in addr_text.replace("\n", ",").split(",") if x.strip()]
+            if len(parts) >= 3 and not re.search(r"\d", parts[-1]):
+                business["Country"] = parts[-1]
+
     # ---- Category (folder-icon line under the business name) ----
     if not business["Category"]:
         for li in soup.select("ul.profileaddrss li"):

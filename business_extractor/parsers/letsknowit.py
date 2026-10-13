@@ -6,20 +6,35 @@ from ..common import *  # noqa: F401,F403 -- see business_extractor/common.py
 
 
 
-def _letsknowit_detail_value(details, label_keyword):
-    """The '.companyDetails' block is a flat list of <h3><label>icon</label>
-    <label><small>Label:</small></label><span>value</span></h3> rows (e.g.
-    Headquarter, Phone, Company Size). Finds the row whose <small> label
-    text matches label_keyword and returns its <span> value."""
+def _letsknowit_fact_label(h3):
+    """Label element of a details row: <small> on the old template,
+    span.lkit-biz-fact__label on the new one."""
+    return h3.find("small") or h3.select_one(".lkit-biz-fact__label")
+
+
+def _letsknowit_fact_value_el(h3):
+    """Value element of a details row. The new template's FIRST <span> is
+    the icon, so prefer span.lkit-biz-fact__value; the old template's
+    value is simply the row's <span>."""
+    return h3.select_one(".lkit-biz-fact__value") or h3.find("span")
+
+
+def _letsknowit_detail_value_el(details, label_keyword):
     if not details:
         return None
     for h3 in details.find_all("h3"):
-        label_el = h3.find("small")
+        label_el = _letsknowit_fact_label(h3)
         if label_el and label_keyword.lower() in clean(label_el.get_text()).lower():
-            span = h3.find("span")
-            if span:
-                return clean(span.get_text())
+            return _letsknowit_fact_value_el(h3)
     return None
+
+
+def _letsknowit_detail_value(details, label_keyword):
+    """The '.companyDetails' block is a flat list of rows (Headquarter /
+    Location, Phone, Company Size, Website ...). Finds the row whose label
+    text matches label_keyword and returns its value text."""
+    el = _letsknowit_detail_value_el(details, label_keyword)
+    return clean(el.get_text()) if el else None
 
 
 def _letsknowit_address_row(details):
@@ -35,7 +50,7 @@ def _letsknowit_address_row(details):
             continue  # a labeled row (Headquarter, Phone, Company Size, Website)
         if not h3.select_one("i.fa-map-marker"):
             continue
-        span = h3.find("span")
+        span = _letsknowit_fact_value_el(h3)
         if span:
             text = clean(span.get_text())
             if text:
@@ -57,6 +72,41 @@ _LETSKNOWIT_CITY_STATE_ZIP_RE = re.compile(
 )
 
 
+def _letsknowit_strip_country(address):
+    """Drop a trailing ", <Country>" segment. US variants by regex, any other
+    country (e.g. ", Australia") via pycountry when it's installed."""
+    address = _LETSKNOWIT_COUNTRY_SUFFIX_RE.sub("", address).strip()
+    parts = [p.strip() for p in address.split(",")]
+    if len(parts) >= 2 and parts[-1] and not re.search(r"\d", parts[-1]):
+        try:
+            import pycountry
+            pycountry.countries.lookup(parts[-1])
+            address = ", ".join(parts[:-1]).strip()
+        except Exception:
+            pass
+    return address
+
+
+_STREET_TYPES = (
+    "street|st|road|rd|avenue|ave|av|drive|dr|crescent|cres|court|ct|lane|ln|"
+    "place|pl|parade|pde|highway|hwy|boulevard|blvd|terrace|tce|way|close|cl|"
+    "circuit|cct|grove|gr|square|sq|walk|esplanade|esp|loop|trail|row|path|"
+    "mews|rise|ridge|view|green|gardens|gdns|broadway"
+)
+
+
+def _split_street_and_city(street):
+    """"12 hilltop crescent Burwood East" (no comma between street and
+    suburb) -> ("12 hilltop crescent", "Burwood East"). Splits after the
+    LAST street-type word that still has words after it."""
+    words = street.split()
+    pattern = re.compile(r"^(?:%s)\.?$" % _STREET_TYPES, re.I)
+    for i in range(len(words) - 2, 0, -1):
+        if pattern.match(words[i]):
+            return " ".join(words[: i + 1]), " ".join(words[i + 1 :])
+    return street, ""
+
+
 def _letsknowit_split_address(address):
     """_split_blinx_address expects 'Street, City, State Zip' (3 parts),
     but letsknowit renders 'Street, City, State Zip, Country' (4 parts),
@@ -66,12 +116,15 @@ def _letsknowit_split_address(address):
     Some listings have no street segment and no internal comma either --
     just "City State Zip" once the country suffix is gone. Handle that
     shape explicitly before falling back to the comma-based splitter."""
-    address = _LETSKNOWIT_COUNTRY_SUFFIX_RE.sub("", address).strip()
+    address = _letsknowit_strip_country(address)
     if "," not in address:
         match = _LETSKNOWIT_CITY_STATE_ZIP_RE.match(address)
         if match:
             return "", match.group("city").strip(), match.group("state").strip(), match.group("zip")
-    return _split_blinx_address(address)
+    street, city, state, zipcode = _split_blinx_address(address)
+    if street and not city:
+        street, city = _split_street_and_city(street)
+    return street, city, state, zipcode
 
 
 def _letsknowit_address_quality(text):
@@ -86,7 +139,7 @@ def _letsknowit_address_quality(text):
     -1 for missing/placeholder text so it always loses to a real address."""
     if not text or text.strip().upper() == "N/A":
         return -1
-    address = _LETSKNOWIT_COUNTRY_SUFFIX_RE.sub("", text).strip()
+    address = _letsknowit_strip_country(text)
     parts = [p.strip() for p in address.split(",") if p.strip()]
     if not parts:
         return -1
@@ -138,13 +191,24 @@ def parse_letsknowit(url, html):
         if tel:
             business["Phone"] = clean(tel.get_text())
 
-    # ---- Website URL ("Website:" row, marked with the tl_exp class) ----
+    # ---- Website URL: old template marks the value with span.tl_exp; the
+    # new one uses a row labelled "Website" (h3.lkit-biz-fact--web). ----
     if details:
         website_span = details.select_one("h3 span.tl_exp")
-        if website_span:
-            link = website_span.find("a", href=True)
-            if link:
-                business["Website URL"] = link["href"].strip()
+        link = website_span.find("a", href=True) if website_span else None
+        if not link:
+            web_el = _letsknowit_detail_value_el(details, "website")
+            link = web_el.find("a", href=True) if web_el else None
+        if not link:
+            link = details.select_one("h3.lkit-biz-fact--web a[href]")
+        if link:
+            business["Website URL"] = link["href"].strip()
+
+    # ---- Website fallback: business-card block's data-web attribute ----
+    if not business["Website URL"]:
+        card = soup.select_one("#lkit-bizcard-print[data-web]")
+        if card and is_meaningful(card.get("data-web", "")):
+            business["Website URL"] = card["data-web"].strip()
 
     # ---- Business Email (sidebar "Contact Details" widget -- the mailto
     #      href itself is blanked out client-side, so read the visible
@@ -189,5 +253,3 @@ def parse_letsknowit(url, html):
             business["Photos"] = photos
 
     return business
-
-

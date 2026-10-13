@@ -109,15 +109,36 @@ def parse_azbusinessfinder(url, html):
     # ---- Category ----
     # 1) breadcrumb trail (separator is "»" on some templates, "►" on others),
     # 2) a "Category: X" label, as used on the find-us-here listing template.
-    breadcrumb = soup.find(
-        lambda tag: tag.name in ("nav", "div", "ul", "ol", "p", "span", "table", "tr", "td")
-        and any(sep in tag.get_text() for sep in ("»", "►", "›"))
-        and tag.find("a")
-    )
+    # soup.find() returns the FIRST matching tag in document order, which is
+    # usually a big outer wrapper (it "contains" a » somewhere and has links),
+    # so its last <a> is an unrelated link. Walk all candidates and take the
+    # most compact one: a short text with a separator and 2+ links.
+    def _is_breadcrumb_candidate(tag):
+        if tag.name not in ("nav", "div", "ul", "ol", "p", "span", "table", "tr", "td"):
+            return False
+        text = tag.get_text()
+        if not any(sep in text for sep in ("»", "►", "›")):
+            return False
+        return len(tag.find_all("a")) >= 2 and len(clean(text)) <= 250
+
+    breadcrumb = None
+    for tag in soup.find_all(_is_breadcrumb_candidate):
+        if breadcrumb is None or len(tag.get_text()) < len(breadcrumb.get_text()):
+            breadcrumb = tag
     if breadcrumb:
-        crumb_links = breadcrumb.find_all("a")
-        if crumb_links:
-            business["Category"] = clean(crumb_links[-1].get_text())
+        crumb_texts = [clean(a.get_text()) for a in breadcrumb.find_all("a")]
+        crumb_texts = [t for t in crumb_texts if t]
+        if crumb_texts:
+            business["Category"] = crumb_texts[-1]
+
+    # Fallback: category links carry a title like
+    # "Computer Repair businesses in Burwood East, Victoria, Australia".
+    if not business["Category"]:
+        for a in soup.find_all("a", title=True):
+            m = re.match(r"^(.{2,60}?)\s+businesses in\s", a["title"], re.I)
+            if m:
+                business["Category"] = clean(m.group(1))
+                break
 
     category_node = None
     for node in soup.find_all(string=re.compile(r"Category:\s*\S")):

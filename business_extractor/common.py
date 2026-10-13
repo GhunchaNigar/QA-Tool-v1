@@ -43,6 +43,7 @@ __all__ = [
     '_looks_like_cloudflare_error',
     '_is_maps_link',
     '_split_blinx_address',
+    '_split_street_and_city',
     '_split_city_state_zip_address',
     '_split_address_allow_no_comma',
     '_find_cf_email',
@@ -383,6 +384,27 @@ def _looks_like_cloudflare_error(html_text):
     combined = html_text[:4000].lower()
     return any(s in combined for s in CLOUDFLARE_ERROR_SIGNALS)
 
+_STREET_TYPES = (
+    "street|st|road|rd|avenue|ave|av|drive|dr|crescent|cres|court|ct|lane|ln|"
+    "place|pl|parade|pde|highway|hwy|boulevard|blvd|terrace|tce|way|close|cl|"
+    "circuit|cct|grove|gr|square|sq|walk|esplanade|esp|loop|trail|row|path|"
+    "mews|rise|ridge|view|green|gardens|gdns|broadway"
+)
+
+
+def _split_street_and_city(street):
+    """"12 hilltop crescent Burwood East" (no comma between street and
+    suburb) -> ("12 hilltop crescent", "Burwood East"). Splits after the
+    LAST street-type word that still has words after it; returns
+    (street, "") unchanged when no such word is found."""
+    words = street.split()
+    pattern = re.compile(r"^(?:%s)\.?$" % _STREET_TYPES, re.I)
+    for i in range(len(words) - 2, 0, -1):
+        if pattern.match(words[i]):
+            return " ".join(words[: i + 1]), " ".join(words[i + 1 :])
+    return street, ""
+
+
 def _is_maps_link(href):
     href = href.lower()
     return "google" in href and "map" in href
@@ -406,7 +428,7 @@ def _is_maps_link(href):
 _RATE_LIMIT_BACKOFFS = [5, 12, 20]
 
 
-def fetch_via_requests(url):
+def fetch_via_requests(url, timeout=30):
     verify = not _domain_needs_cert_bypass(url)
     if not verify:
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -416,7 +438,7 @@ def fetch_via_requests(url):
     for delay in delays:
         if delay:
             time.sleep(delay)
-        response = requests.get(url, headers=HEADERS, timeout=30, verify=verify)
+        response = requests.get(url, headers=HEADERS, timeout=timeout, verify=verify)
         if response.status_code != 429:
             break
 
@@ -434,13 +456,20 @@ def fetch_via_requests(url):
 
 def fetch_via_playwright(url, worker_path="playwright_worker.py", timeout_ms=45000):
     ignore_https_errors = _domain_needs_cert_bypass(url)
+    # The worker makes up to two navigation attempts, each with the full
+    # timeout_ms budget. For the default budget the old single-budget outer
+    # limit is kept; for slow sites (bigger budget) allow both attempts so
+    # the worker isn't killed before it can report its own result.
+    outer_timeout = (timeout_ms / 1000) + 30
+    if timeout_ms > 45000:
+        outer_timeout = (2 * timeout_ms / 1000) + 30
     proc = subprocess.run(
         [sys.executable, worker_path, url, str(timeout_ms), str(int(ignore_https_errors))],
         capture_output=True,
         text=True,
         encoding="utf-8",
         errors="replace",
-        timeout=(timeout_ms / 1000) + 30,
+        timeout=outer_timeout,
     )
 
     stdout = proc.stdout.strip()

@@ -116,6 +116,14 @@ SITE_PARSERS = {
 }
 
 
+# Sites that are simply slow to load. Per-site timeouts (seconds for
+# requests, milliseconds for Playwright) so these don't time out while
+# every other site keeps the quick defaults.
+SLOW_SITES = {
+    "letsknowit.com": {"requests_timeout": 90, "playwright_ms": 120000},
+}
+
+
 def extract_business(url, worker_path="playwright_worker.py"):
 
     domain = urlparse(url).netloc.lower()
@@ -130,6 +138,10 @@ def extract_business(url, worker_path="playwright_worker.py"):
     else:
         method, parser = "requests", parse_generic
 
+    slow = SLOW_SITES.get(matched, {})
+    req_timeout = slow.get("requests_timeout", 30)
+    pw_kwargs = {"timeout_ms": slow["playwright_ms"]} if "playwright_ms" in slow else {}
+
     if method == "api":
         # Parser drives its own requests calls; no HTML fetch needed.
         business = parser(url)
@@ -139,7 +151,7 @@ def extract_business(url, worker_path="playwright_worker.py"):
 
     if method == "requests":
         try:
-            html = fetch_via_requests(url)
+            html = fetch_via_requests(url, timeout=req_timeout)
             blocked = _looks_blocked(html)
         except requests.exceptions.RequestException:
             html = None
@@ -147,7 +159,7 @@ def extract_business(url, worker_path="playwright_worker.py"):
 
         if blocked:
             # Unmapped/blocked site -- retry via Playwright automatically
-            html = fetch_via_playwright(url, worker_path=worker_path)
+            html = fetch_via_playwright(url, worker_path=worker_path, **pw_kwargs)
         else:
             # Parsers can opt in to a rendered re-fetch when the plain HTML
             # is missing JS-loaded content (e.g. ProvenExpert opening
@@ -161,7 +173,7 @@ def extract_business(url, worker_path="playwright_worker.py"):
                     wants_render = False
                 if wants_render:
                     try:
-                        rendered = fetch_via_playwright(url, worker_path=worker_path)
+                        rendered = fetch_via_playwright(url, worker_path=worker_path, **pw_kwargs)
                         if rendered and not _looks_blocked(rendered):
                             html = rendered
                             if needs_render(rendered):
@@ -176,7 +188,7 @@ def extract_business(url, worker_path="playwright_worker.py"):
                         print(f"[render] {url}: Playwright re-fetch failed: {e}",
                               file=sys.stderr)
     else:
-        html = fetch_via_playwright(url, worker_path=worker_path)
+        html = fetch_via_playwright(url, worker_path=worker_path, **pw_kwargs)
 
     if _looks_like_cloudflare_error(html):
         raise RuntimeError(
@@ -186,6 +198,20 @@ def extract_business(url, worker_path="playwright_worker.py"):
         )
 
     business = parser(url, html)
+
+    # Several parsers return an empty record when the page looks like a
+    # bot-wall/captcha. Surface that as an error rather than a green tick
+    # with every field blank, which looks like "the listing has no data".
+    if (
+        isinstance(business, dict)
+        and _looks_blocked(html)
+        and not any(v for v in business.values())
+    ):
+        raise RuntimeError(
+            f"{url} returned a bot-check / captcha page instead of the "
+            f"listing, so nothing could be extracted. Try again later or "
+            f"from another network."
+        )
 
     if isinstance(business, list):
         return [filter_business_fields(record, url) for record in business]

@@ -9,6 +9,14 @@ from ..common import *  # noqa: F401,F403 -- see business_extractor/common.py
 _EARTHMOM_LABEL_MAP = {
     "phone": "Phone",
     "website": "Website URL",
+    # Members type these labels by hand, so accept the usual variants.
+    "url": "Website URL",
+    "web": "Website URL",
+    "web site": "Website URL",
+    "website url": "Website URL",
+    "website address": "Website URL",
+    "telephone": "Phone",
+    "phone number": "Phone",
 }
 
 _EARTHMOM_ABOUT_HEADINGS = {"about us", "about", "about company", "about the company"}
@@ -85,6 +93,10 @@ def parse_earthmom(url, html):
         address_text = clean(address_tag.get_text(separator=" "))
         if address_text:
             street, city, state, zipcode = _split_blinx_address(address_text)
+            if street and not city:
+                # "12 hilltop crescent Burwood East, Victoria 3151" has no
+                # comma between street and suburb.
+                street, city = _split_street_and_city(street)
             business["Street"] = street
             business["City"] = city
             business["State"] = state
@@ -161,7 +173,13 @@ def parse_earthmom(url, html):
         href = a["href"]
         if not href.startswith("http"):
             continue
-        if "earthmom.org" in href.lower():
+        # Skip Earth Mom's own links, including its social profiles
+        # (facebook.com/EarthMomOrg, twitter.com/earthmomorg, ...).
+        if "earthmom" in href.lower():
+            continue
+        # Site-wide footer social icons ("Earth Mom Pinterest", ...) point at
+        # accounts with unrelated handles, so match on the icon markup.
+        if "network-icon" in a.get("class", []) or "earth mom" in a.get("title", "").lower():
             continue
         if _is_maps_link(href):
             if not business["GBP Link"]:
@@ -181,5 +199,3 @@ def parse_earthmom(url, html):
             business["Logo"] = urljoin(url, profile_img["src"])
 
     return business
-
-
