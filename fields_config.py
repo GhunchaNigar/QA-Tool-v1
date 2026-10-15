@@ -94,6 +94,12 @@ SOURCE_FIELDS = {
         "Social Media Links", "Business Email",
         "Category", "Logo",
     ],
+    "cataloxy.net": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Keywords", "Description",
+        "Social Media Links", "Business Email",
+        "Category", "Logo",
+    ],
     
     "fyple.com": [
         "Name",	"Street", "City", "State", "Zipcode", "Country",
@@ -352,6 +358,10 @@ SOURCE_FIELDS = {
         "Phone", "Website URL", "Keywords", "Description",
         "Business Email", "Logo",
     ],
+    "yelp.com": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Hours", "Category", "Logo", "Photos",
+    ],
     "homify.com": [
         "Name", "Street", "City", "State", "Zipcode",
         "Phone", "Website URL", "Keywords", "Description",
@@ -434,6 +444,57 @@ SOURCE_FIELDS = {
         "Name", "Street", "City", "State", "Zipcode", "Country",
         "Phone", "Website URL", "Description", "Hours",
         "Social Media Links", "Category", "Logo",
+    ],
+    "hotfrog.com": [
+        "Name", "Street", "City", "State", "Zipcode",
+        "Phone", "Website URL", "Keywords", "Description", "Hours",
+        "Social Media Links", "Category", "Logo", "Photos",
+    ],
+    "thelocal.directory": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Description", "Category", "Logo",
+    ],
+    "nextbizmaker.com": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Description", "Hours",
+        "Social Media Links", "GBP Link", "Category", "Logo",
+    ],
+    "golocalads.com": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Description", "Business Email",
+        "Category", "Logo",
+    ],
+    "757pages.com": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Description", "Hours", "Category", "Logo",
+    ],
+    "techdirectory.io": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Description", "Hours", "Category", "Logo",
+    ],
+    "couponler.com": [
+        "Name", "Street", "City", "State", "Zipcode",
+        "Phone", "Website URL", "Description", "Logo",
+    ],
+    "zipcode2business.com": [
+        "Name", "Street", "City", "State", "Zipcode",
+        "Phone", "Website URL", "Description",
+        "Social Media Links", "Category", "Photos",
+    ],
+    "addonbiz.com": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Description", "Hours",
+        "Category", "Logo",
+    ],
+    "directoryup.com": [
+        "Name", "Street", "City", "State", "Zipcode",
+        "Phone", "Website URL", "Description", "Hours",
+        "Category", "Logo",
+    ],
+    "nextbizthing.com": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Description", "Hours",
+        "Social Media Links", "GBP Link", "Category", "Logo",
     ],
 
 }

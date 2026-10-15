@@ -5,6 +5,7 @@ them as parsers.<module>.parse_xxx. Add new site parsers here.
 
 
 from . import a_zbusinessfinder
+from . import addonbiz
 from . import americansearch
 from . import askmap
 from . import b2bco
@@ -23,6 +24,7 @@ from . import citysquares
 from . import cleansway
 from . import closelocation
 from . import cybo
+from . import directoryup
 from . import dbesearch
 from . import earthmom
 from . import find_us_here
@@ -88,3 +90,13 @@ from . import bizmaker
 from . import countrypwr
 from . import bulkadspost
 from . import cities_globalbusinessdirectory
+from . import hotfrog
+from . import thelocal_directory
+from . import nextbizmaker
+from . import nextbizthing
+from . import yelp
+from . import zipcode2business
+from . import golocalads
+from . import couponler
+from . import techdirectory
+from . import pages757

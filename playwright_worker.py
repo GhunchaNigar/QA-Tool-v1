@@ -444,6 +444,13 @@ def _preview(text, n=300):
 # clears within single-digit seconds, but padding a second, longer
 # wait in after that covers a slower-draining limiter without making
 # every normal, non-rate-limited page pay for it.
+# Domains that 403 the bundled headless Chromium but serve a real Chrome.
+# Keep in sync with the "playwright" entries in business_extractor/dispatch.py
+# that mention REAL_CHROME_DOMAINS. (Yelp is handled by its own check below.)
+REAL_CHROME_DOMAINS = (
+    "techdirectory.io",
+)
+
 _RATE_LIMIT_BACKOFFS = [5.0, 12.0]
 _RATE_LIMIT_MAX_WAIT = 20.0  # cap even if Retry-After asks for longer
 
@@ -458,39 +465,131 @@ async def scrape(url, timeout, ignore_https_errors=False):
 
     try:
         async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True,
-                # Removes the most commonly checked automation flag from
-                # Chromium's own DevTools protocol surface; combined with
-                # the stealth init script below, this covers both the JS-
-                # visible and protocol-visible automation signals.
-                args=["--disable-blink-features=AutomationControlled"],
+            is_yelp = own_domain == "yelp.com" or own_domain.endswith(".yelp.com")
+            needs_real_chrome = is_yelp or any(
+                own_domain == d or own_domain.endswith("." + d)
+                for d in REAL_CHROME_DOMAINS
             )
-            context = await browser.new_context(
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Safari/537.36"
-                ),
-                viewport={"width": 1280, "height": 900},
-                locale="en-US",
-                extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
-                # Some sources (confirmed: bestdealfinder.com) serve a
-                # broken/self-signed/mismatched TLS certificate on HTTPS,
-                # which Chromium rejects outright as
-                # net::ERR_CERT_AUTHORITY_INVALID before any navigation
-                # can happen at all -- goto() fails immediately, on both
-                # the fast and patient attempts, with no page content to
-                # even evaluate "thin" against. This is passed in per-call
-                # (see __main__ below) rather than defaulted True, so it
-                # only relaxes verification for the specific domains the
-                # caller (extractor.py's IGNORE_CERT_ERRORS_DOMAINS) has
-                # already confirmed have this problem, not for every site.
-                ignore_https_errors=ignore_https_errors,
-            )
+
+            if needs_real_chrome:
+                # These sites' bot protection rejects the default setup
+                # (Playwright's bundled headless-shell Chromium) with a bare
+                # "403 Forbidden", even though the same URL opens fine in a
+                # normal browser. Launch a real, full Chrome-family browser
+                # headless instead (no window opens) and present its real
+                # version in the user agent. Order of preference:
+                #   1. installed Google Chrome / Microsoft Edge (Windows/Mac)
+                #   2. a system Chromium (Linux / Streamlit Cloud installs
+                #      one via packages.txt)
+                #   3. Playwright's "chromium" channel = the new headless
+                #      mode, which shares the real browser's code path and
+                #      fingerprint
+                #   4. the bundled headless shell (last resort)
+                launch_args = ["--disable-blink-features=AutomationControlled"]
+                if sys.platform.startswith("linux"):
+                    launch_args += ["--no-sandbox", "--disable-dev-shm-usage"]
+                browser = None
+                launch_errors = []
+
+                for channel in ("chrome", "msedge", "chromium"):
+                    try:
+                        browser = await p.chromium.launch(
+                            channel=channel, headless=True, args=launch_args,
+                        )
+                        break
+                    except Exception as e:
+                        launch_errors.append(f"{channel}: {str(e).splitlines()[0][:80]}")
+                        browser = None
+
+                if browser is None:
+                    import shutil
+                    for exe in (
+                        shutil.which("chromium"),
+                        shutil.which("chromium-browser"),
+                        "/usr/bin/chromium",
+                        "/usr/bin/chromium-browser",
+                    ):
+                        if not exe:
+                            continue
+                        try:
+                            browser = await p.chromium.launch(
+                                executable_path=exe, headless=True, args=launch_args,
+                            )
+                            break
+                        except Exception as e:
+                            launch_errors.append(f"{exe}: {str(e).splitlines()[0][:80]}")
+                            browser = None
+
+                if browser is None:
+                    browser = await p.chromium.launch(headless=True, args=launch_args)
+
+                # Match the user agent's OS to the machine we're really on,
+                # so it agrees with navigator.platform and the TLS/HTTP
+                # fingerprint instead of claiming Windows from a Linux box.
+                if sys.platform == "win32":
+                    os_token = "Windows NT 10.0; Win64; x64"
+                elif sys.platform == "darwin":
+                    os_token = "Macintosh; Intel Mac OS X 10_15_7"
+                else:
+                    os_token = "X11; Linux x86_64"
+                context = await browser.new_context(
+                    user_agent=(
+                        f"Mozilla/5.0 ({os_token}) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        f"Chrome/{browser.version} Safari/537.36"
+                    ),
+                    viewport={"width": 1280, "height": 900},
+                    locale="en-US",
+                    extra_http_headers={
+                        "Accept-Language": "en-US,en;q=0.9",
+                        "Upgrade-Insecure-Requests": "1",
+                    },
+                    ignore_https_errors=ignore_https_errors,
+                )
+                # Short warm-up on the site's home page so it sets its
+                # normal cookies and the real request carries a Referer,
+                # like a visitor who clicked through.
+                try:
+                    warm = await context.new_page()
+                    await warm.goto(f"https://{urlparse(url).netloc}/", timeout=10000,
+                                    wait_until="domcontentloaded")
+                    await warm.wait_for_timeout(1500)
+                    await warm.close()
+                except Exception:
+                    pass
+            else:
+                browser = await p.chromium.launch(
+                    headless=True,
+                    # Removes the most commonly checked automation flag from
+                    # Chromium's own DevTools protocol surface; combined with
+                    # the stealth init script below, this covers both the JS-
+                    # visible and protocol-visible automation signals.
+                    args=["--disable-blink-features=AutomationControlled"],
+                )
+                context = await browser.new_context(
+                    user_agent=(
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/120.0.0.0 Safari/537.36"
+                    ),
+                    viewport={"width": 1280, "height": 900},
+                    locale="en-US",
+                    extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+                    # Some sources (confirmed: bestdealfinder.com) serve a
+                    # broken/self-signed/mismatched TLS certificate on HTTPS,
+                    # which Chromium rejects outright as
+                    # net::ERR_CERT_AUTHORITY_INVALID. Passed in per-call so
+                    # it only relaxes verification for known-bad domains.
+                    ignore_https_errors=ignore_https_errors,
+                )
             await context.add_init_script(_STEALTH_INIT_SCRIPT)
 
             debug_notes = []
+            if needs_real_chrome:
+                debug_notes.append(
+                    f"browser={browser.version} (real-chrome path)"
+                    + (f" | launch fallbacks: {'; '.join(launch_errors)}" if launch_errors else "")
+                )
             html, text, title = "", "", ""
 
             # ── Attempt loop ────────────────────────────────────────
@@ -537,7 +636,8 @@ async def scrape(url, timeout, ignore_https_errors=False):
                     debug_notes.append(f"{label}: bare-domain title stub ({title!r})")
                 elif thin:
                     debug_notes.append(
-                        f"{label}: too thin ({len(text.strip())} chars) | preview: {_preview(text)!r}"
+                        f"{label}: too thin ({len(text.strip())} chars) | HTTP {status} | "
+                        f"title={title!r} | html={len(html):,} chars | preview: {_preview(text)!r}"
                     )
                 else:
                     debug_notes.append(f"{label} OK | text={len(text):,} chars")

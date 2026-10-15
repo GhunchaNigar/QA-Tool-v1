@@ -12,6 +12,7 @@ import requests
 
 from . import parsers
 from .common import fetch_via_requests, fetch_via_playwright, filter_business_fields
+from .common import fetch_via_scraperapi
 from .common import _looks_blocked, _looks_like_cloudflare_error
 
 # NOTE (carried over from the old single-file extractor.py): parse_generic
@@ -43,6 +44,8 @@ SITE_PARSERS = {
     "provenexpert.com": ("requests", parsers.provenexpert.parse_provenexpert),
     "zipleaf.us": ("requests", parsers.zipleaf.parse_zipleaf),
     "cataloxy.us": ("requests", parsers.cataloxy.parse_cataloxy),
+    # Same site/markup on its .net domain (e.g. nsw-state.cataloxy.net).
+    "cataloxy.net": ("requests", parsers.cataloxy.parse_cataloxy),
     "fyple.com": ("requests", parsers.fyple.parse_fyple),
     "merchantcircle.com": ("requests", parsers.merchantcircle.parse_merchantcircle),
     "globalbusinessdirectory.us": ("requests", parsers.globalbusinessdirectory.parse_globalbusinessdirectory),
@@ -113,7 +116,34 @@ SITE_PARSERS = {
     "provenemployer.com": ("requests", parsers.provenemployer.parse_provenemployer),
     "biztobiz.org": ("requests", parsers.biztobiz.parse_biztobiz),
     "bizmaker.org": ("requests", parsers.bizmaker.parse_bizmaker),
+    # "requests" first; extract_business() automatically retries through
+    # Playwright if Hotfrog serves a bot-check page or rejects the request.
+    "hotfrog.com": ("requests", parsers.hotfrog.parse_hotfrog),
+    "thelocal.directory": ("requests", parsers.thelocal_directory.parse_thelocal_directory),
+    "nextbizmaker.com": ("requests", parsers.nextbizmaker.parse_nextbizmaker),
+    "nextbizthing.com": ("requests", parsers.nextbizthing.parse_nextbizthing),
+    "directoryup.com": ("requests", parsers.directoryup.parse_directoryup),
+    "addonbiz.com": ("requests", parsers.addonbiz.parse_addonbiz),
+    "zipcode2business.com": ("requests", parsers.zipcode2business.parse_zipcode2business),
+    "golocalads.com": ("requests", parsers.golocalads.parse_golocalads),
+    "couponler.com": ("requests", parsers.couponler.parse_couponler),
+    # techdirectory.io answers plain requests (and the default headless
+    # Chromium) with "403 Forbidden", so go straight to Playwright, which
+    # uses the installed Chrome for this domain (REAL_CHROME_DOMAINS in
+    # playwright_worker.py).
+    "techdirectory.io": ("playwright", parsers.techdirectory.parse_techdirectory),
+    # 757pages.com is a Brilliant Directories site (same layout family as
+    # techdirectory.io); "requests" first, automatic Playwright retry if blocked.
+    "757pages.com": ("requests", parsers.pages757.parse_pages757),
+    # Yelp blocks plain requests, so go straight to Playwright.
+    "yelp.com": ("playwright", parsers.yelp.parse_yelp),
 }
+
+
+# Sites that 403 cloud/datacenter IPs regardless of browser. If Playwright
+# fails on these, the fetch is retried through ScraperAPI (needs the
+# SCRAPERAPI_KEY env var / Streamlit secret).
+PROXY_FALLBACK_DOMAINS = {"techdirectory.io"}
 
 
 # Sites that are simply slow to load. Per-site timeouts (seconds for
@@ -121,6 +151,12 @@ SITE_PARSERS = {
 # every other site keeps the quick defaults.
 SLOW_SITES = {
     "letsknowit.com": {"requests_timeout": 90, "playwright_ms": 120000},
+    # Yelp loads slowly and its bot checks add delay; the default 45s
+    # budget (75s outer limit) timed out before the worker could report.
+    "yelp.com": {"requests_timeout": 90, "playwright_ms": 120000},
+    # Couponler is server-rendered but loads many ad/analytics scripts, so
+    # the default 30s requests / 45s Playwright budgets can time out.
+    "couponler.com": {"requests_timeout": 90, "playwright_ms": 120000},
 }
 
 
@@ -188,7 +224,20 @@ def extract_business(url, worker_path="playwright_worker.py"):
                         print(f"[render] {url}: Playwright re-fetch failed: {e}",
                               file=sys.stderr)
     else:
-        html = fetch_via_playwright(url, worker_path=worker_path, **pw_kwargs)
+        try:
+            html = fetch_via_playwright(url, worker_path=worker_path, **pw_kwargs)
+        except RuntimeError as pw_err:
+            # Some sites refuse datacenter IPs outright (403 for every
+            # browser/header combination), so retry through ScraperAPI.
+            if matched in PROXY_FALLBACK_DOMAINS:
+                try:
+                    html = fetch_via_scraperapi(url)
+                except Exception as proxy_err:
+                    raise RuntimeError(
+                        f"{pw_err} | ScraperAPI fallback failed: {proxy_err}"
+                    ) from proxy_err
+            else:
+                raise
 
     if _looks_like_cloudflare_error(html):
         raise RuntimeError(

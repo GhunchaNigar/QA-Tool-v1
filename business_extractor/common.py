@@ -440,6 +440,13 @@ def _is_maps_link(href):
 _RATE_LIMIT_BACKOFFS = [5, 12, 20]
 
 
+# Statuses worth retrying in place with a backoff: 429 = rate limited,
+# 502/503/504 = origin temporarily down/overloaded (often recovers within
+# seconds).
+_SERVER_ERROR_STATUSES = (502, 503, 504)
+_RETRYABLE_STATUSES = (429,) + _SERVER_ERROR_STATUSES
+
+
 def fetch_via_requests(url, timeout=30):
     verify = not _domain_needs_cert_bypass(url)
     if not verify:
@@ -451,7 +458,7 @@ def fetch_via_requests(url, timeout=30):
         if delay:
             time.sleep(delay)
         response = requests.get(url, headers=HEADERS, timeout=timeout, verify=verify)
-        if response.status_code != 429:
+        if response.status_code not in _RETRYABLE_STATUSES:
             break
 
     if response.status_code == 429:
@@ -462,8 +469,52 @@ def fetch_via_requests(url, timeout=30):
             f"Rate limited (429) fetching {url} after {len(delays)} attempts"
         )
 
+    if response.status_code in _SERVER_ERROR_STATUSES:
+        # Origin is down / overloaded (e.g. Couponler's "Application Error"
+        # 503 page). Retried above with backoff; if it is still failing the
+        # problem is on the site's side, not in the parser or fetcher.
+        raise requests.exceptions.RequestException(
+            f"Server error ({response.status_code}) fetching {url} after "
+            f"{len(delays)} attempts -- the site appears to be down or "
+            f"overloaded. Try again later."
+        )
+
     response.raise_for_status()
     return response.text
+
+
+def _scraperapi_key():
+    """ScraperAPI key from the SCRAPERAPI_KEY env var, falling back to
+    Streamlit secrets (Streamlit Cloud -> app Settings -> Secrets)."""
+    import os
+    key = os.environ.get("SCRAPERAPI_KEY", "").strip()
+    if key:
+        return key
+    try:
+        import streamlit as st
+        return str(st.secrets.get("SCRAPERAPI_KEY", "")).strip()
+    except Exception:
+        return ""
+
+
+def fetch_via_scraperapi(url, timeout=90, render=False):
+    """Fetch through ScraperAPI's rotating residential-grade proxies. Used
+    for sites that refuse datacenter IPs (e.g. techdirectory.io answers
+    every request from a cloud host with 403 Forbidden, whatever the
+    browser or headers). Raises RuntimeError if no key is configured."""
+    key = _scraperapi_key()
+    if not key:
+        raise RuntimeError(
+            "No SCRAPERAPI_KEY configured (set it as an environment variable "
+            "or in Streamlit secrets)"
+        )
+    params = {"api_key": key, "url": url, "country_code": "us"}
+    if render:
+        params["render"] = "true"
+    resp = requests.get("https://api.scraperapi.com/", params=params, timeout=timeout)
+    if resp.status_code != 200:
+        raise RuntimeError(f"ScraperAPI returned HTTP {resp.status_code} for {url}")
+    return resp.text
 
 
 def fetch_via_playwright(url, worker_path="playwright_worker.py", timeout_ms=45000):

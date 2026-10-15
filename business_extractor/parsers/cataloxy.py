@@ -1,5 +1,5 @@
 """
-Site parser: cataloxy.us
+Site parser: cataloxy.us / cataloxy.net (same markup)
 """
 
 from ..common import *  # noqa: F401,F403 -- see business_extractor/common.py
@@ -145,6 +145,21 @@ def parse_cataloxy(url, html):
             if _hostname_matches_social_domain(href, domain):
                 business["Social Media Links"][network] = href
 
+    # ---- Zipcode fallback ----
+    # Some listings (seen on cataloxy.net) have no postalCode in the address
+    # markup, but the description ends with the full address, e.g.
+    # "..., 12 Rickard Road, Carramar, NSW 2163." Only accept a code that
+    # directly follows "<City>, <STATE ABBR>" so a stray number can't match.
+    if not business["Zipcode"] and business["City"]:
+        text_for_zip = " ".join(
+            [business["Description"]]
+            + [clean(m.get("content", "")) for m in soup.find_all("meta", attrs={"name": "description"})]
+        )
+        zip_match = re.search(
+            re.escape(business["City"]) + r",\s*[A-Z]{2,3}\s+(\d{4,5}(?:-\d{4})?)\b",
+            text_for_zip,
+        )
+        if zip_match:
+            business["Zipcode"] = zip_match.group(1)
+
     return business
-
-
