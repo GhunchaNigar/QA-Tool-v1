@@ -91,6 +91,7 @@ def extract_one(url: str) -> dict:
     ai_extractor.extract_batch used, so comparator.compare_row marks the
     whole row as "SCRAPE ERROR" instead of crashing the batch.
     """
+    fetch_info = None
     try:
         raw = extract_business(url)
 
@@ -101,20 +102,24 @@ def extract_one(url: str) -> dict:
         if isinstance(raw, list):
             raw = raw[0] if raw else {}
 
+        # How the page was fetched: {"method", "credits", "attempts"}
+        fetch_info = raw.pop("_fetch", None) if isinstance(raw, dict) else None
         result = _normalize_extracted(raw, url)
 
     except Exception as e:
+        # Failed fetches still carry the credits that were spent.
+        fetch_info = getattr(e, "fetch_info", None)
         result = {"_scrape_error": str(e), "_scrape_debug": repr(e)}
 
     result["_url"] = url
+    result["_fetch"] = fetch_info or {"method": "", "credits": 0, "attempts": []}
     return result
 
 
 def extract_batch(urls: list, batch_size: int = 4, progress_callback=None) -> list:
     """
-    Extract every URL, in parallel (bounded by batch_size — extractor.py's
-    Playwright fallback launches a real browser subprocess per URL, so keep
-    this modest). Returns results in the SAME ORDER as `urls`, with a
+    Extract every URL, in parallel (bounded by batch_size — each URL may
+    fall back to a paid ScraperAPI call, so keep this modest). Returns results in the SAME ORDER as `urls`, with a
     progress_callback(done_count, total_count) fired as each completes —
     same shape the old ai_extractor.extract_batch used.
     """

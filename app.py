@@ -3,10 +3,15 @@ from fields_config import ALL_FIELDS, SOURCE_FIELDS, VISUAL_FIELDS, detect_sourc
 from data_extractor import extract_batch
 from comparator import compare_all
 from excel_writer import write_excel, make_filename
-import subprocess, sys
+import os
 
-subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"],
-               capture_output=True)
+# ScraperAPI is the fallback when the simple fetch fails or hits a captcha.
+# Accept the key from Streamlit secrets as well as a plain environment variable.
+if not os.environ.get("SCRAPERAPI_KEY"):
+    try:
+        os.environ["SCRAPERAPI_KEY"] = st.secrets["SCRAPERAPI_KEY"]
+    except Exception:
+        pass
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -62,8 +67,30 @@ for key, default in [
 st.title("🏢 Business Listing Checker")
 st.caption(
     "Enter your business data once, paste any number of directory URLs, "
-    "and get a color-coded Excel report. No API keys required."
+    "and get a color-coded Excel report. A ScraperAPI key is optional "
+    "(used as a fallback for pages that block simple fetching)."
 )
+st.markdown("---")
+
+# ── ScraperAPI key (paste in the UI) ──────────────────────────────────────────
+# Pre-filled from env / Streamlit secrets if already configured; otherwise the
+# user can paste it here. Kept in session state and applied before each run.
+if "scraperapi_key" not in st.session_state:
+    st.session_state.scraperapi_key = os.environ.get("SCRAPERAPI_KEY", "")
+
+st.text_input(
+    "🔑 ScraperAPI Key",
+    type="password",
+    key="scraperapi_key",
+    placeholder="Paste your ScraperAPI key here",
+    help="Used as a fallback when the simple fetch fails or hits a captcha. "
+         "Leave blank to run without it.",
+)
+if st.session_state.scraperapi_key.strip():
+    os.environ["SCRAPERAPI_KEY"] = st.session_state.scraperapi_key.strip()
+else:
+    os.environ.pop("SCRAPERAPI_KEY", None)
+
 st.markdown("---")
 
 # ── STEP 1 — Business data form ───────────────────────────────────────────────
@@ -235,6 +262,7 @@ if st.button("Start Analysis", disabled=run_disabled, type="primary"):
             "user_data":      user_data,
             "known_urls":     known_urls,
             "url_source_map": url_source_map,
+            "scraperapi_key": st.session_state.scraperapi_key.strip(),
         }
         st.switch_page("pages/analysis.py")
 

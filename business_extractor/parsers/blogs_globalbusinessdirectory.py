@@ -3,6 +3,7 @@ Site parser: blogs.globalbusinessdirectory.us
 """
 
 from ..common import *  # noqa: F401,F403 -- see business_extractor/common.py
+from .band import _band_description_sections
 
 
 
@@ -129,5 +130,3 @@ def parse_blogs_globalbusinessdirectory(url, html):
             business["Logo"] = urljoin(url, img["src"])
 
     return business
-
-

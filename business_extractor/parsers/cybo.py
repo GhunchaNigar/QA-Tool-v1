@@ -19,6 +19,71 @@ CYBO_NETWORK_DOMAIN_ROOT = {
     "TikTok": "tiktok.com",
 }
 
+_JSONLD_DAYS = {
+    "mo": "Monday", "tu": "Tuesday", "we": "Wednesday", "th": "Thursday",
+    "fr": "Friday", "sa": "Saturday", "su": "Sunday",
+}
+
+
+def _to_12h(hhmm):
+    """'19:30' -> '7:30 PM' (leaves anything that is not HH:MM untouched)."""
+    m = re.fullmatch(r"(\d{1,2}):(\d{2})", hhmm.strip())
+    if not m:
+        return hhmm.strip()
+    h, mi = int(m.group(1)), m.group(2)
+    suffix = "AM" if h < 12 or h == 24 else "PM"
+    return f"{(h % 12) or 12}:{mi} {suffix}"
+
+
+def _cybo_hours(soup):
+    """Opening hours of the current Cybo layout.
+
+    1. Rendered rows:  <div class="...hoursRow"><span class="...hoursDay">Every day</span>
+                       <span><span>7:00 AM - 7:30 PM</span></span></div>
+       (present in the HTML even while the "Hours" card is collapsed; class names
+       carry a build hash, so they are matched by their "hoursRow"/"hoursDay" part)
+    2. JSON-LD "openingHours": ["Mo 7:00-19:30", ...]
+    """
+    parts = []
+    for row in soup.find_all(class_=re.compile(r"hoursRow")):
+        day_tag = row.find(class_=re.compile(r"hoursDay"))
+        day = clean(day_tag.get_text(" ")) if day_tag else ""
+        times = []
+        for sp in (day_tag.find_next_siblings() if day_tag else row.find_all("span")):
+            leaves = [x for x in sp.find_all("span") if not x.find("span")] or [sp]
+            times += [clean(x.get_text(" ")) for x in leaves if clean(x.get_text(" "))]
+        if day and times:
+            parts.append(f"{day}: {', '.join(times)}")
+    if parts:
+        return "; ".join(parts)
+
+    for tag in soup.find_all("script", type="application/ld+json"):
+        try:
+            data = json.loads(tag.string or tag.get_text() or "")
+        except Exception:
+            continue
+        for item in (data if isinstance(data, list) else [data]):
+            oh = item.get("openingHours") if isinstance(item, dict) else None
+            if isinstance(oh, str):
+                oh = [oh]
+            if not oh:
+                continue
+            by_day = {}
+            for entry in oh:
+                m = re.match(r"^\s*([A-Za-z,\-]+)\s+(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})\s*$", entry)
+                if not m:
+                    continue
+                span = f"{_to_12h(m.group(2))} \u2013 {_to_12h(m.group(3))}"
+                for d in re.split(r",", m.group(1)):
+                    d = d.strip().lower()[:2]
+                    if d in _JSONLD_DAYS:
+                        by_day.setdefault(_JSONLD_DAYS[d], []).append(span)
+            if by_day:
+                if len(by_day) == 7 and len({tuple(v) for v in by_day.values()}) == 1:
+                    return f"Every day: {', '.join(next(iter(by_day.values())))}"
+                return "; ".join(f"{d}: {', '.join(v)}" for d, v in by_day.items())
+    return ""
+
 
 def parse_cybo(url, html):
 
@@ -113,7 +178,8 @@ def parse_cybo(url, html):
                 business["Description"] = desc
 
     # ---- Hours ----
-    hours_match = re.search(r"\bHours\s*\n(.*?)\nPhone\b", page_text, re.S)
+    business["Hours"] = _cybo_hours(soup)
+    hours_match = None if business["Hours"] else re.search(r"\bHours\s*\n(.*?)\nPhone\b", page_text, re.S)
     if hours_match:
         hour_lines = [clean(line) for line in hours_match.group(1).split("\n")]
         hour_lines = [line for line in hour_lines if line and line != "\u25be"]
@@ -142,5 +208,3 @@ def parse_cybo(url, html):
         business["Logo"] = urljoin(url, og_image["content"])
 
     return business
-
-

@@ -1,0 +1,24 @@
+[1020/094303.396:ERROR:net\disk_cache\cache_util_win.cc:25] Unable to move the cache: Access is denied. (0x5)
+[1020/094303.397:ERROR:net\disk_cache\cache_util_win.cc:25] Unable to move the cache: Access is denied. (0x5)
+[1020/094303.402:ERROR:net\disk_cache\disk_cache.cc:284] Unable to create cache
+[1020/094303.402:ERROR:gpu\ipc\host\gpu_disk_cache.cc:737] Gpu Cache Creation failed: -2
+[1020/094303.402:ERROR:net\disk_cache\disk_cache.cc:284] Unable to create cache
+[1020/094303.402:ERROR:gpu\ipc\host\gpu_disk_cache.cc:737] Gpu Cache Creation failed: -2
+[1020/094303.406:ERROR:net\disk_cache\cache_util_win.cc:25] Unable to move the cache: Access is denied. (0x5)
+[1020/094303.412:ERROR:net\disk_cache\disk_cache.cc:284] Unable to create cache
+[1020/094303.412:ERROR:gpu\ipc\host\gpu_disk_cache.cc:737] Gpu Cache Creation failed: -2
+[1020/094305.392:WARNING:components\leveldb_proto\internal\leveldb_database.cc:124] Unable to open C:\Users\awand\OneDrive\Documents\GitHub\QA-Tool-v1\.headed_profile\Default\shared_proto_db\metadata: IO error: C:\Users\awand\OneDrive\Documents\GitHub\QA-Tool-v1\.headed_profile\Default\shared_proto_db\metadata/LOCK: Access denied. (ChromeMethodBFE: 15::LockFile::5)
+[1020/094306.380:ERROR:components\services\storage\service_worker\service_worker_storage.cc:1814] Failed to delete the database: Database IO error
+[1020/094307.362:ERROR:net\disk_cache\cache_util_win.cc:25] Unable to move the cache: Access is denied. (0x5)
+[1020/094307.363:ERROR:net\disk_cache\disk_cache.cc:284] Unable to create cache
+[1020/094307.363:ERROR:gpu\ipc\host\gpu_disk_cache.cc:737] Gpu Cache Creation failed: -2
+[1020/094307.366:ERROR:net\disk_cache\cache_util_win.cc:25] Unable to move the cache: Access is denied. (0x5)
+[1020/094307.366:ERROR:net\disk_cache\disk_cache.cc:284] Unable to create cache
+[1020/094307.366:ERROR:gpu\ipc\host\gpu_disk_cache.cc:737] Gpu Cache Creation failed: -2
+[1020/094307.367:ERROR:net\disk_cache\cache_util_win.cc:25] Unable to move the cache: Access is denied. (0x5)
+[1020/094307.367:ERROR:net\disk_cache\disk_cache.cc:284] Unable to create cache
+[1020/094307.367:ERROR:gpu\ipc\host\gpu_disk_cache.cc:737] Gpu Cache Creation failed: -2
+[1020/094307.405:WARNING:components\leveldb_proto\internal\leveldb_database.cc:124] Unable to open C:\Users\awand\OneDrive\Documents\GitHub\QA-Tool-v1\.headed_profile\Default\shared_proto_db\metadata: IO error: C:\Users\awand\OneDrive\Documents\GitHub\QA-Tool-v1\.headed_profile\Default\shared_proto_db\metadata/LOCK: Access denied. (ChromeMethodBFE: 15::LockFile::5)
+[1020/094307.754:WARNING:content\browser\btm\btm_database.cc:128] Failed to initialize the DIPS SQLite database.
+[1020/094309.344:WARNING:components\leveldb_proto\internal\leveldb_database.cc:124] Unable to open C:\Users\awand\OneDrive\Documents\GitHub\QA-Tool-v1\.headed_profile\Default\shared_proto_db\metadata: IO error: C:\Users\awand\OneDrive\Documents\GitHub\QA-Tool-v1\.headed_profile\Default\shared_proto_db\metadata/LOCK: Access denied. (ChromeMethodBFE: 15::LockFile::5)
+[1020/094309.422:WARNING:components\leveldb_proto\internal\leveldb_database.cc:124] Unable to open C:\Users\awand\OneDrive\Documents\GitHub\QA-Tool-v1\.headed_profile\Default\shared_proto_db\metadata: IO error: C:\Users\awand\OneDrive\Documents\GitHub\QA-Tool-v1\.headed_profile\Default\shared_proto_db\metadata/LOCK: Access denied. (ChromeMethodBFE: 15::LockFile::5)

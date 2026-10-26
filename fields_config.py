@@ -12,6 +12,19 @@ ALL_FIELDS = [
 ]
 
 SOURCE_FIELDS = {
+    "surfyourtown.com": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Hours", "Category", "Logo",
+    ],
+    "foursquare.com": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Category", "Logo", "Photos",
+    ],
+    "nearfinderus.com": [
+        "Name", "Owner Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Description", "Hours", "Social Media Links",
+        "GBP Link", "Business Email", "Category", "Logo",
+    ],
     "bpublic.com": [
         "Name", "Street", "City", "State", "Zipcode", "Country",
         "Phone", "Website URL", "Description", "Hours", "Category", "Logo",
@@ -86,6 +99,16 @@ SOURCE_FIELDS = {
         "Name", "Street", "City", "State", "Zipcode", "Country",
         "Phone", "Website URL", "Keywords", "Description",
         "Hours", "Social Media Links", "GBP Link", "Business Email",
+        "Category", "Logo",
+    ],
+    "acompio.us": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Keywords", "Description",
+        "Social Media Links", "GBP Link", "Business Email", "Category",
+    ],
+    "tradeford.com": [
+        "Name", "Owner Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Keywords", "Description", "Business Email",
         "Category", "Logo",
     ],
     "cataloxy.us": [
@@ -491,10 +514,64 @@ SOURCE_FIELDS = {
         "Phone", "Website URL", "Description", "Hours",
         "Category", "Logo",
     ],
+    "brownbook.net": [
+        "Name", "Street", "City", "State", "Zipcode",
+        "Phone", "Website URL", "Keywords", "Description", "Hours",
+        "Social Media Links", "Business Email", "Category", "Logo",
+    ],
+    "enrollbusiness.com": [
+        "Name", "Owner Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Keywords", "Description", "Hours",
+        "Social Media Links", "Category", "Logo",
+    ],
+    "medium.com": [
+        "Name", "Owner Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Keywords", "Description", "Business Email",
+        "Photos",
+    ],
+    "batchgeo.com": [
+        "Name", "Owner Name", "Street", "City", "State", "Zipcode",
+        "Phone", "Website URL", "Keywords", "Description", "Hours",
+        "Social Media Links", "GBP Link", "Business Email",
+    ],
+    "ecitybiz.com": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Description", "Category",
+    ],
+    "quora.com": [
+        "Name", "Owner Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Keywords", "Description", "Hours",
+        "Social Media Links", "Business Email", "Logo",
+    ],
+    "hub.biz": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Description", "Hours",
+        "Business Email", "Category", "Logo",
+    ],
+    "crunchbase.com": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Keywords", "Description",
+        "Social Media Links", "Category", "Logo",
+    ],
+    "manta.com": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Keywords", "Description", "Hours",
+        "Social Media Links", "GBP Link", "Business Email",
+        "Category", "Logo", "Photos",
+    ],
     "nextbizthing.com": [
         "Name", "Street", "City", "State", "Zipcode", "Country",
         "Phone", "Website URL", "Description", "Hours",
         "Social Media Links", "GBP Link", "Category", "Logo",
+    ],
+    "directory9.net": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Description", "Category", "Logo",
+    ],
+    "biass.us": [
+        "Name", "Owner Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Description", "Social Media Links",
+        "Category", "Logo",
     ],
 
 }

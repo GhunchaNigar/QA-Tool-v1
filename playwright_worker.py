@@ -32,6 +32,10 @@ BLOCK_SIGNALS = [
     "ddos-guard", "checking your browser", "verify you are human",
     "enable cookies to continue", "please enable cookies",
     "security check", "access to this page has been denied",
+    # Cloudflare interstitial / Turnstile. Without these the worker used to
+    # report the "Just a moment..." page as a successful fetch.
+    "just a moment", "challenges.cloudflare.com", "_cf_chl_opt",
+    "cf-turnstile", "verifying you are human", "performing security",
 ]
 
 # ── Rate-limit signals ───────────────────────────────────────────────
@@ -117,7 +121,47 @@ _DATA_READY_SELECTOR = (
 
 def _is_blocked(html, text):
     combined = (html[:3000] + text[:1000]).lower()
-    return any(s in combined for s in BLOCK_SIGNALS)
+    if any(s in combined for s in BLOCK_SIGNALS):
+        return True
+    # Challenge pages push their markers past 3000 chars (inline CSS/JS) but
+    # have no real content, so only flag a late marker on small pages.
+    if len(html) < 60000:
+        tail = html.lower()
+        return any(m in tail for m in ("challenges.cloudflare.com", "_cf_chl_opt", "cf-turnstile"))
+    return False
+
+
+async def _challenge_result(page, response):
+    """Challenge never cleared: return the page as-is right away (skipping the
+    slow scroll/expand steps) so the caller reports it as blocked."""
+    try:
+        html = await page.content()
+        title = await page.title()
+    except Exception:
+        html, title = "", ""
+    return html, "", title, None, (response.status if response else None), None
+
+
+async def _wait_out_challenge(page, max_s=12):
+    """Cloudflare's "Just a moment..." interstitial often resolves itself
+    after a few seconds in a real browser and then redirects to the page.
+    Poll the title (survives the navigation, unlike wait_for_function)
+    instead of snapshotting the challenge page. If it never clears, the
+    caller's _is_blocked check reports it as blocked."""
+    for _ in range(max_s):
+        try:
+            title = (await page.title()).lower()
+        except Exception:
+            title = "just a moment"  # mid-navigation; keep waiting
+        if "just a moment" not in title:
+            try:
+                await page.wait_for_load_state("domcontentloaded", timeout=10000)
+            except Exception:
+                pass
+            await page.wait_for_timeout(1500)
+            return True
+        await page.wait_for_timeout(1000)
+    return False
 
 
 def _is_rate_limited(html, text, status=None):
@@ -386,6 +430,8 @@ async def _attempt(context, url, timeout, patient):
                 response = await page.goto(url, timeout=fast_networkidle_timeout, wait_until="networkidle")
             except Exception:
                 response = await page.goto(url, timeout=timeout, wait_until="domcontentloaded")
+            if not await _wait_out_challenge(page):
+                return await _challenge_result(page, response)
             # Give client-side-hydrated content (e.g. blinx.biz's
             # business record, loaded via a post-load XHR) a chance to
             # land before the fast pass extracts. This is a real signal
@@ -399,6 +445,8 @@ async def _attempt(context, url, timeout, patient):
             # wait explicitly for the data-bearing selector with a much
             # longer budget before falling back to extraction regardless.
             response = await page.goto(url, timeout=timeout, wait_until="domcontentloaded")
+            if not await _wait_out_challenge(page):
+                return await _challenge_result(page, response)
             data_arrived = await _wait_for_data(page, min(timeout, 20000))
             if not data_arrived:
                 # Selector never showed up within budget -- give the
@@ -449,10 +497,172 @@ def _preview(text, n=300):
 # that mention REAL_CHROME_DOMAINS. (Yelp is handled by its own check below.)
 REAL_CHROME_DOMAINS = (
     "techdirectory.io",
+    "brownbook.net",
 )
 
 _RATE_LIMIT_BACKOFFS = [5.0, 12.0]
 _RATE_LIMIT_MAX_WAIT = 20.0  # cap even if Retry-After asks for longer
+
+
+# Domains where Cloudflare blocks every headless browser (verified: requests,
+# curl_cffi and headless Chrome all get "Just a moment..."), but a normal,
+# visible Chrome window passes. For these the worker opens a real window; if a
+# "verify you are human" box appears, click it. The browser uses its own
+# profile folder (.headed_profile, next to this file) so Cloudflare's "passed"
+# cookie is kept and later runs usually need no click.
+HEADED_DOMAINS = (
+    "nearfinderus.com",
+    "brownbook.net",
+    "enrollbusiness.com",   # also covers au./us./uk. ... sub-domains
+    "foursquare.com",       # also covers app.foursquare.com
+    "surfyourtown.com",     # 403s headless browsers; needs a system-wide VPN too
+    "manta.com",            # Cloudflare "Just a moment..." blocks all headless/requests
+    "crunchbase.com",       # Cloudflare "verify you are human"; visible Chrome passes
+    "hub.biz",              # also covers <slug>.hub.biz listing pages
+    "biass.us",             # also covers <slug>.biass.us business sites; verification step
+    "directory9.net",       # verification step; visible Chrome passes
+)
+
+
+async def _open_profile_context(p, profile, headless, errors):
+    """Open the persistent .headed_profile context (visible or headless).
+    Tries installed Chrome, then Edge, then bundled Chromium. Returns the
+    context, or None if every browser failed to start."""
+    launch_args = ["--disable-blink-features=AutomationControlled"]
+    if not headless:
+        launch_args.append("--start-maximized")
+    if sys.platform.startswith("linux"):
+        launch_args += ["--no-sandbox", "--disable-dev-shm-usage"]
+    for channel in ("chrome", "msedge", None):
+        try:
+            kwargs = dict(
+                user_data_dir=profile,
+                headless=headless,
+                args=launch_args,
+                ignore_default_args=["--enable-automation"],
+            )
+            if headless:
+                kwargs["viewport"] = {"width": 1280, "height": 900}
+            else:
+                kwargs["no_viewport"] = True
+            if channel:
+                kwargs["channel"] = channel
+            return await p.chromium.launch_persistent_context(**kwargs)
+        except Exception as e:
+            errors.append(f"{'headless ' if headless else ''}{channel or 'chromium'}: "
+                          f"{str(e).splitlines()[0][:150]}")
+    return None
+
+
+async def _try_headless_with_profile(p, profile, url, errors):
+    """Quiet first attempt: same saved profile (so any Cloudflare 'passed'
+    cookie is reused) but NO window. Returns (html, text, title) if the real
+    page came back, or None if the site blocked/challenged us -- in which
+    case the caller falls back to a visible window."""
+    ctx = await _open_profile_context(p, profile, True, errors)
+    if ctx is None:
+        return None
+    try:
+        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+        status = None
+        try:
+            resp = await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            status = resp.status if resp else None
+        except Exception as e:
+            errors.append(f"headless goto: {str(e).splitlines()[0][:120]}")
+            return None
+        if status is not None and status >= 400:
+            errors.append(f"headless: HTTP {status}")
+            return None
+
+        # Give a JS challenge a few seconds to clear on its own.
+        for _ in range(5):
+            try:
+                html = await page.content()
+                text = await page.inner_text("body")
+            except Exception:
+                html = text = ""
+            if html and not _is_blocked(html, text) and len(text.strip()) >= 200:
+                await page.wait_for_timeout(1500)  # let late scripts finish
+                try:
+                    html = await page.content()
+                    text = await page.inner_text("body")
+                    title = await page.title()
+                except Exception:
+                    title = ""
+                return html, text, title
+            await asyncio.sleep(2)
+        errors.append("headless: blocked/challenge page")
+        return None
+    finally:
+        await ctx.close()
+
+
+async def _scrape_headed(p, url, timeout_ms, result):
+    import os
+    profile = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".headed_profile")
+    os.makedirs(profile, exist_ok=True)
+
+    errors = []
+
+    # 1) Try silently first. A visible window is only opened when the site
+    #    actually blocks the headless attempt (verification / captcha / 403).
+    quiet = await _try_headless_with_profile(p, profile, url, errors)
+    if quiet is not None:
+        html, text, title = quiet
+        result.update({"success": True, "html": html, "text": text, "title": title,
+                       "debug": f"Playwright OK (headless, saved profile) | text={len(text):,} chars"})
+        return result
+
+    # 2) Verification needed -> open the visible browser so it can be cleared.
+    ctx = await _open_profile_context(p, profile, False, errors)
+    if ctx is None:
+        result["debug"] = ("Playwright: could not open a visible browser (close any Chrome "
+                           "using the .headed_profile folder, or run `playwright install "
+                           "chromium`) | " + " | ".join(errors))
+        return result
+
+    html = text = title = ""
+    passed = False
+    try:
+        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+        await page.bring_to_front()
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+        except Exception as e:
+            errors.append(f"goto: {str(e).splitlines()[0][:120]}")
+
+        # Wait for the real page; this is the window in which you click the
+        # "verify you are human" box if Cloudflare shows one.
+        deadline = asyncio.get_event_loop().time() + max(timeout_ms / 1000, 60)
+        while asyncio.get_event_loop().time() < deadline:
+            try:
+                html = await page.content()
+                text = await page.inner_text("body")
+            except Exception:
+                html = text = ""
+            if html and not _is_blocked(html, text):
+                passed = True
+                break
+            await asyncio.sleep(2)
+        if passed:
+            await page.wait_for_timeout(1500)  # let late scripts finish
+            try:
+                html = await page.content()
+                text = await page.inner_text("body")
+                title = await page.title()
+            except Exception:
+                pass
+    finally:
+        await ctx.close()
+
+    if not passed:
+        result["debug"] = ("Playwright: blocked/CAPTCHA - the verify box was not cleared in "
+                           "time | " + " | ".join(errors))
+        return result
+    result.update({"success": True, "html": html, "text": text, "title": title,
+                   "debug": f"Playwright OK (visible browser) | text={len(text):,} chars"})
+    return result
 
 
 async def scrape(url, timeout, ignore_https_errors=False):
@@ -465,6 +675,8 @@ async def scrape(url, timeout, ignore_https_errors=False):
 
     try:
         async with async_playwright() as p:
+            if any(own_domain == d or own_domain.endswith("." + d) for d in HEADED_DOMAINS):
+                return await _scrape_headed(p, url, timeout, result)
             is_yelp = own_domain == "yelp.com" or own_domain.endswith(".yelp.com")
             needs_real_chrome = is_yelp or any(
                 own_domain == d or own_domain.endswith("." + d)
@@ -652,6 +864,12 @@ async def scrape(url, timeout, ignore_https_errors=False):
                     await asyncio.sleep(wait_s)
                     rate_limit_retries += 1
                     continue
+
+                # A Cloudflare challenge that didn't clear won't clear on an
+                # identical retry; stop now so the worker reports in time.
+                if blocked and any(m in html.lower() for m in
+                                   ("challenges.cloudflare.com", "_cf_chl_opt", "just a moment")):
+                    break
 
                 # Non-rate-limit failure: retry once (the original
                 # fast -> patient fallback), then give up.

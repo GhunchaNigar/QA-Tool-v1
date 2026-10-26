@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Checking Browser</title>
+    <meta charset="UTF-8">
+    <script>
+        // Extrai a URL original do parâmetro GET
+        function getParam(name) {
+            const params = new URLSearchParams(window.location.search);
+            return params.get(name);
+        }
+
+        // Define cookie e redireciona para a URL original
+        document.cookie = "js_challenge_passed=true; path=/; max-age=600";
+
+        const redirectTo = getParam("redirect_to") || "/";
+        window.location.href = redirectTo;
+    </script>
+</head>
+<body>
+    <noscript><h1>JavaScript it's necessary</h1></noscript>
+    <p>Checking your Browser...</p>
+</body>
+</html>

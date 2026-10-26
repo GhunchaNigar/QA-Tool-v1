@@ -3,5 +3,5 @@ requests
 beautifulsoup4
 lxml
 openpyxl
-playwright
 pycountry
+curl_cffi

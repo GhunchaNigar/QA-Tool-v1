@@ -3,11 +3,33 @@ pages/analysis.py
 Dedicated progress + results page.
 Reads st.session_state.analysis_payload set by app.py.
 """
+import os
 import streamlit as st
 from fields_config import ALL_FIELDS, SOURCE_FIELDS, VISUAL_FIELDS
 from data_extractor import extract_batch
 from comparator import compare_all
 from excel_writer import write_excel, make_filename
+
+def _attempts_md(attempts):
+    """Numbered list of every fetch step tried for one URL."""
+    lines = []
+    for i, a in enumerate(attempts or [], 1):
+        mark = "✅" if a.get("ok") else "❌"
+        note = a.get("note") or ""
+        note = f" — {note[:120]}" if note and not a.get("ok") else ""
+        credits = f" · {a['credits']} credits" if a.get("credits") else ""
+        secs = f" · {a['seconds']}s" if a.get("seconds") else ""
+        memo = " · 🧠 remembered: this site needs rendering" if a.get("remembered") else ""
+        lines.append(f"{i}. {mark} {a.get('step', '?')}{note}{memo}{credits}{secs}")
+    return "\n".join(lines)
+
+
+def _fetch_label(fetch):
+    """'ScraperAPI premium' / 'none (every step failed)' / '' for one row."""
+    if fetch.get("method"):
+        return fetch["method"]
+    return "none (every step failed)" if fetch.get("attempts") else ""
+
 
 st.set_page_config(
     page_title="Analysis in Progress — Business Listing Checker",
@@ -56,6 +78,11 @@ else:
 
     total = len(known_urls)
 
+    # Apply the ScraperAPI key pasted in the UI (if any) for this run
+    _key = payload.get("scraperapi_key") or st.session_state.get("scraperapi_key", "")
+    if _key:
+        os.environ["SCRAPERAPI_KEY"] = _key
+
     status_box = st.empty()
     progress   = st.progress(0)
     log_box    = st.empty()
@@ -81,7 +108,9 @@ else:
 
         errors    = sum(1 for ex in all_extracted if ex.get("_scrape_error"))
         extract_ok = total - errors
-        log(f"Extraction done — {extract_ok} OK, {errors} failed.")
+        credits_total = sum((ex.get("_fetch") or {}).get("credits", 0) for ex in all_extracted)
+        log(f"Extraction done — {extract_ok} OK, {errors} failed. "
+            f"ScraperAPI credits used: {credits_total}.")
         progress.progress(0.80)
 
         with st.expander("🔍 Extraction debug info"):
@@ -91,6 +120,13 @@ else:
                 error      = ex.get("_scrape_error")
                 icon       = "✅" if not error else "❌"
                 st.markdown(f"**{icon} {url}** [{src}]")
+                fetch = ex.get("_fetch") or {}
+                if fetch.get("attempts") or fetch.get("method"):
+                    st.caption(
+                        f"🛰️ Fetched via **{_fetch_label(fetch)}** · "
+                        f"💳 **{fetch.get('credits', 0)}** ScraperAPI credit(s)"
+                    )
+                    st.markdown(_attempts_md(fetch.get("attempts")))
                 if error:
                     st.error(error)
                 else:
@@ -134,10 +170,29 @@ if results:
     correct   = sum(1 for r in results if r.get("Status") == "CORRECT")
     incorrect = total - correct
 
-    c1, c2, c3 = st.columns(3)
+    credits_used = sum((ex.get("_fetch") or {}).get("credits", 0) for ex in extracted_data)
+
+    c1, c2, c3, c4 = st.columns(4)
     c1.metric("Total URLs", total)
     c2.metric("✅ Correct", correct)
     c3.metric("❌ Issues Found", incorrect)
+    c4.metric("💳 ScraperAPI credits", credits_used)
+
+    if extracted_data:
+        with st.expander("🛰️ How each page was fetched"):
+            st.dataframe(
+                [
+                    {
+                        "URL": ex.get("_url", ""),
+                        "Fetched via": _fetch_label(ex.get("_fetch") or {}),
+                        "Credits": (ex.get("_fetch") or {}).get("credits", 0),
+                        "Result": "❌ failed" if ex.get("_scrape_error") else "✅ extracted",
+                    }
+                    for ex in extracted_data
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
 
     excel_bytes = write_excel(results, extracted_data, user_data)
     st.download_button(
