@@ -1,14 +1,28 @@
 """
-Site parser: globalbusinessdirectory.us
+Site parser: listings.globalbusinessdirectory.us
 """
 
 from ..common import *  # noqa: F401,F403 -- see business_extractor/common.py
 
 
-_GBD_REGION_CLASS_RE = re.compile(r"job_listing_region-([\w-]+)")
+
+def _listings_gbd_jsonld(soup):
+    """Return the first LocalBusiness JSON-LD object on the page, if any."""
+    for script in soup.find_all("script", type="application/ld+json"):
+        if not script.string:
+            continue
+        try:
+            data = json.loads(script.string, strict=False)
+        except Exception:
+            continue
+        objects = data if isinstance(data, list) else [data]
+        for obj in objects:
+            if isinstance(obj, dict) and obj.get("@type") == "LocalBusiness":
+                return obj
+    return None
 
 
-def parse_globalbusinessdirectory(url, html):
+def parse_listings_globalbusinessdirectory(url, html):
 
     soup = BeautifulSoup(html, "lxml")
     business = empty_business()
@@ -17,82 +31,164 @@ def parse_globalbusinessdirectory(url, html):
     if _looks_blocked(html):
         return business
 
+    jsonld = _listings_gbd_jsonld(soup)
+
     # ---- Business Name ----
-    name_tag = soup.select_one('h1.entry-title[itemprop="name"]')
+    name_tag = soup.select_one("h1.case27-primary-text")
     if name_tag:
         business["Business Name"] = clean(name_tag.get_text())
+    if not business["Business Name"] and jsonld and jsonld.get("name"):
+        business["Business Name"] = clean(jsonld["name"])
 
-    if not business["Business Name"]:
-        meta_title = soup.find("meta", itemprop="title")
-        if meta_title and meta_title.get("content"):
-            business["Business Name"] = clean(meta_title["content"])
+    # ---- Owner Name (rendered as the listing's "tagline") ----
+    # Caution: this theme's "tagline" field is frequently filled with SEO
+    # keyword stuffing (e.g. "plano real estate agent, plano realtor,
+    # homes for sale plano, ...") rather than an actual person's name.
+    # A real name won't contain commas or run to a dozen+ words, so use
+    # that as a sanity check before trusting it as Owner Name.
+    owner_tag = soup.select_one("h2.profile-tagline")
+    if owner_tag:
+        owner_text = clean(owner_tag.get_text())
+        looks_like_keyword_list = "," in owner_text or len(owner_text.split()) > 6
+        if is_meaningful(owner_text) and not looks_like_keyword_list:
+            business["Owner Name"] = owner_text
 
-    # ---- Address ----
-    addr_tag = soup.select_one("a.google_map_link")
-    if addr_tag:
-        addr_text = clean(addr_tag.get_text())
-        if addr_text:
-            street, city, state, zipcode = _split_blinx_address(addr_text)
-            business["Street"] = street
-            business["City"] = city
-            business["State"] = state
-            business["Zipcode"] = zipcode
+    # ---- Owner Name fallback: "Author" block ----
+    # When the tagline is keyword-stuffed (the common case) rather than a
+    # real name, fall back to the listing's Author block
+    # (.block-type-author .host-name). Note this is the directory account
+    # that submitted the listing, not a verified owner-name field -- it
+    # will often be a handle like "RealEstate38" rather than a person's
+    # actual name, so treat it as a best-effort fallback only.
+    if not business["Owner Name"]:
+        author_tag = soup.select_one(".block-type-author .host-name")
+        if author_tag:
+            author_text = clean(author_tag.get_text())
+            if is_meaningful(author_text):
+                business["Owner Name"] = author_text
 
-    # ---- Country  ----
-    article = soup.select_one("article.job_listing")
-    if article:
-        region_match = _GBD_REGION_CLASS_RE.search(" ".join(article.get("class", [])))
-        if region_match:
-            business["Country"] = region_match.group(1).replace("-", " ").title()
+    # ---- Address (Street / City / State / Zipcode) ----
+    addr_tag = soup.select_one(".map-block-address p")
+    addr_text = clean(addr_tag.get_text()) if addr_tag else ""
+    if not addr_text and jsonld:
+        addr_obj = jsonld.get("address")
+        if isinstance(addr_obj, dict) and addr_obj.get("address"):
+            addr_text = clean(addr_obj["address"])
+        elif isinstance(addr_obj, str):
+            addr_text = clean(addr_obj)
+    if addr_text:
+        street, city, state, zipcode = _split_listings_gbd_address(addr_text)
+        business["Street"] = street
+        business["City"] = city
+        business["State"] = state
+        business["Zipcode"] = zipcode
 
-    # ---- Phone  ----
-    phone_tag = soup.select_one('[itemprop="telephone"]')
-    if phone_tag:
-        business["Phone"] = clean(phone_tag.get_text())
+    # ---- Country (rendered as a "Region" block) ----
+    region_tag = soup.select_one(".block-type-terms .pf-body li a span")
+    if region_tag:
+        region_text = clean(region_tag.get_text())
+        if is_meaningful(region_text):
+            business["Country"] = region_text
 
-    # ---- Website URL ----
-    site_link = soup.select_one("a.listing--website[href]")
-    if site_link:
-        business["Website URL"] = site_link["href"]
+    # ---- Contact Information block: Email / Phone / Website ----
+    for li in soup.select(".block-type-details .pf-body li"):
+        icon = li.find("i")
+        value_tag = li.select_one("span.wp-editor-content")
+        if not icon or not value_tag:
+            continue
+        icon_classes = icon.get("class", [])
+        value_text = clean(value_tag.get_text())
+        if not value_text:
+            continue
+        if "email" in icon_classes:
+            business["Business Email"] = value_text
+        elif "phone" in icon_classes:
+            business["Phone"] = value_text
+        elif "web" in icon_classes:
+            business["Website URL"] = value_text
 
-    # ---- Keywords  ----
-    tagline = soup.select_one(".listing-tagline")
-    if tagline:
-        kw_text = clean(tagline.get_text())
-        if is_meaningful(kw_text):
-            business["Keywords"] = kw_text
+    if not business["Business Email"] and jsonld and jsonld.get("email"):
+        business["Business Email"] = clean(jsonld["email"])
+    if not business["Phone"] and jsonld and jsonld.get("telephone"):
+        business["Phone"] = clean(jsonld["telephone"])
+
+    # Fallback: the "Website" quick-action button near the top of the page
+    # (icon class "fa-link", href to the business's own external site).
+    if not business["Website URL"]:
+        for a in soup.select(".lmb-calltoaction a[href], .quick-listing-actions a[href]"):
+            href = a.get("href", "")
+            if href.startswith("http") and a.find("i", class_="fa-link"):
+                business["Website URL"] = href
+                break
 
     # ---- Description ----
-    desc_tag = soup.select_one("#listing-description .box-inner p")
+    desc_tag = soup.select_one(".block-type-text .pf-body p")
     if desc_tag:
         desc_text = clean(desc_tag.get_text(separator=" "))
         if is_meaningful(desc_text):
             business["Description"] = desc_text
+    if not business["Description"] and jsonld and jsonld.get("description"):
+        stripped = re.sub(r"<[^>]+>", " ", jsonld["description"])
+        stripped = clean(stripped)
+        if is_meaningful(stripped):
+            business["Description"] = stripped
 
-    # ---- Category  ----
-    cat_links = [clean(a.get_text()) for a in soup.select(".listing-category a")]
-    cat_links = [c for c in cat_links if c]
-    if cat_links:
-        business["Category"] = ", ".join(cat_links)
+    # ---- Category ----
+    cat_names = [clean(s.get_text()) for s in soup.select(".block-type-categories .category-name")]
+    cat_names = [c for c in cat_names if c]
+    if cat_names:
+        business["Category"] = ", ".join(cat_names)
 
-    # ---- Logo  ----
-    logo_tag = soup.select_one(".listing-logo img")
-    if logo_tag:
-        logo_src = logo_tag.get("data-src") or logo_tag.get("src")
-        if logo_src and not logo_src.startswith("data:"):
+    # ---- Hours (theme renders this as its own block, when present) ----
+    # Confirmed on neera-truong-real-estate: the actual markup class is
+    # "block-type-work_hours" (not "block-type-hours" or
+    # "block-type-business_hours" as previously assumed), so the old
+    # selector never matched and Hours came back blank even when the
+    # page had a populated weekly schedule.
+    hours_tag = soup.select_one(
+        ".block-type-work_hours .pf-body, "
+        ".block-type-hours .pf-body, "
+        ".block-type-business_hours .pf-body"
+    )
+    if hours_tag:
+        hours_text = clean_multiline(hours_tag.get_text(separator="\n"))
+        if is_meaningful(hours_text):
+            business["Hours"] = hours_text
+
+    # ---- Logo ----
+    # MyListing renders the logo as a CSS background on <a class="profile-avatar">,
+    # not an <img>. The href is the full-size file; the inline style holds a
+    # 300x300 thumbnail. Fall back to the thumbnail, then JSON-LD "logo".
+    avatar = soup.select_one("a.profile-avatar")
+    if avatar:
+        logo_src = avatar.get("href") or ""
+        if not logo_src.lower().startswith(("http", "/")):
+            m = re.search(r"url\(['\"]?([^'\")]+)", avatar.get("style", ""))
+            logo_src = m.group(1) if m else ""
+        if logo_src:
             business["Logo"] = urljoin(url, logo_src)
+    if not business["Logo"] and jsonld and jsonld.get("logo"):
+        jl = jsonld["logo"]
+        if isinstance(jl, list):
+            jl = jl[0] if jl else ""
+        if isinstance(jl, dict):
+            jl = jl.get("url", "")
+        if isinstance(jl, str) and jl.startswith(("http", "/")):
+            business["Logo"] = urljoin(url, jl)
 
     # ---- Social Media Links ----
-    for a in soup.find_all("a", href=True):
+    content_scope = soup.select_one("#c27-single-listing") or soup
+    own_domain = urlparse(url).netloc.lower().replace("www.", "")
+    for a in content_scope.find_all("a", href=True):
         href = a["href"]
         if not href.startswith("http"):
             continue
-        if "globalbusinessdirectory.us" in href.lower():
+        if own_domain in href.lower():
             continue
         for domain, network in SOCIAL_DOMAINS.items():
-            if domain in href.lower():
+            if _hostname_matches_social_domain(href, domain):
                 business["Social Media Links"][network] = href
 
     return business
 
-
+parse_globalbusinessdirectory = parse_listings_globalbusinessdirectory

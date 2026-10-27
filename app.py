@@ -289,3 +289,4 @@ if st.session_state.get("results"):
     with col2:
         if st.button("📊 View Results Page"):
             st.switch_page("pages/analysis.py")
+            

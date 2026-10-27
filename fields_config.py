@@ -468,6 +468,11 @@ SOURCE_FIELDS = {
         "Phone", "Website URL", "Description", "Hours",
         "Social Media Links", "Category", "Logo",
     ],
+    "bigbizmaker.com": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Description", "Hours",
+        "Social Media Links", "Category", "Logo",
+    ],
     "hotfrog.com": [
         "Name", "Street", "City", "State", "Zipcode",
         "Phone", "Website URL", "Keywords", "Description", "Hours",
@@ -538,6 +543,15 @@ SOURCE_FIELDS = {
         "Name", "Street", "City", "State", "Zipcode", "Country",
         "Phone", "Website URL", "Description", "Category",
     ],
+    "sites.bubblelife.com": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Description", "Hours", "Category", "Logo",
+    ],
+    "clickasnap.com": [
+        "Name", "Street", "City", "State", "Zipcode",
+        "Phone", "Website URL", "Keywords", "Description", "Business Email",
+        "Logo",
+    ],
     "quora.com": [
         "Name", "Owner Name", "Street", "City", "State", "Zipcode", "Country",
         "Phone", "Website URL", "Keywords", "Description", "Hours",
@@ -569,9 +583,19 @@ SOURCE_FIELDS = {
         "Phone", "Website URL", "Description", "Category", "Logo",
     ],
     "biass.us": [
-        "Name", "Owner Name", "Street", "City", "State", "Zipcode", "Country",
+        "Name", "Street", "City", "State", "Zipcode", "Country",
         "Phone", "Website URL", "Description", "Social Media Links",
         "Category", "Logo",
+    ],
+    "patch.com": [
+        "Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Keywords", "Description", "Hours",
+        "Category", "Logo",
+    ],
+    "storeboard.com": [
+        "Name", "Owner Name", "Street", "City", "State", "Zipcode", "Country",
+        "Phone", "Website URL", "Keywords", "Description", "Hours",
+        "Social Media Links", "GBP Link", "Business Email", "Category", "Logo",
     ],
 
 }

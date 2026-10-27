@@ -134,6 +134,9 @@ SITE_PARSERS = {
     "provenemployer.com": ("requests", parsers.provenemployer.parse_provenemployer),
     "biztobiz.org": ("requests", parsers.biztobiz.parse_biztobiz),
     "bizmaker.org": ("requests", parsers.bizmaker.parse_bizmaker),
+    # BigBizMaker (www.bigbizmaker.com/<country>/<city>/<category>/<slug>): Brilliant
+    # Directories, server-rendered, so plain requests is enough (ScraperAPI fallback if blocked).
+    "bigbizmaker.com": ("requests", parsers.bigbizmaker.parse_bigbizmaker),
     # "requests" first; extract_business() automatically retries through
     # Playwright if Hotfrog serves a bot-check page or rejects the request.
     "hotfrog.com": ("requests", parsers.hotfrog.parse_hotfrog),
@@ -167,6 +170,12 @@ SITE_PARSERS = {
     # Chrome-fingerprint fetch (curl_cffi) passes; blocked pages escalate to
     # Playwright automatically.
     "medium.com": ("curl_cffi", parsers.medium.parse_medium),
+    # Clickasnap profile bios (Next.js; bio is in the meta description and
+    # flight data). Behind Cloudflare, so use the Chrome-fingerprint fetch.
+    "clickasnap.com": ("curl_cffi", parsers.clickasnap.parse_clickasnap),
+    # BubbleLife Connect / Advice Local sites: server-rendered, schema.org
+    # microdata in the Contact Info widget, so plain requests is enough.
+    "sites.bubblelife.com": ("requests", parsers.bubblelife.parse_bubblelife),
     # Quora profile bios are inlined in the page as GraphQL JSON; same
     # Chrome-fingerprint fetch with automatic Playwright fallback.
     "quora.com": ("curl_cffi", parsers.quora.parse_quora),
@@ -190,6 +199,13 @@ SITE_PARSERS = {
     # directory9.net (eDirectory platform). Sits behind a verification step, so it
     # opens a visible Chrome window (HEADED_DOMAINS in playwright_worker.py).
     "directory9.net": ("playwright", parsers.directory9.parse_directory9),
+    # Patch business listings (patch.com/<state>/<town>/business/listing/<id>/<slug>):
+    # server-rendered Next.js; full record is in __NEXT_DATA__ + JSON-LD, so plain
+    # requests is enough (automatic ScraperAPI fallback if blocked).
+    "patch.com": ("requests", parsers.patch.parse_patch),
+    # Storeboard profiles (www.storeboard.com/<slug>): server-rendered; JSON-LD + visible
+    # Contact / About cards, so plain requests is enough (ScraperAPI fallback if blocked).
+    "storeboard.com": ("requests", parsers.storeboard.parse_storeboard),
 }
 
 
